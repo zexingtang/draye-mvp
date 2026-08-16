@@ -67,8 +67,10 @@
 - **本地 ADC 认证走的是自建 OAuth 客户端，不是 gcloud 自带的**——`gcloud auth application-default login` 默认用 Google 自己那个共享 OAuth 客户端，对 Sheets/Drive 这类"敏感" scope 没走完 Google 的验证流程，会被直接拒绝（不是"未验证应用"警告页那种能点"继续"的，是硬拒绝）。解法：在 Cloud Console 自己建一个 Desktop 类型的 OAuth 客户端（当前叫 "Draye"，同意屏幕设成"外部+测试"，测试用户加了 fallinto2@gmail.com），登录命令带 `--client-id-file` 指向这个客户端的 JSON。存储用的 Sheet ID 在 `.env` 的 `SHEET_ID`。
 - **正式存储**：一个 Google Sheet（`Draye Tracking Data`），三个 tab（Tracking/Columns/Account），已经分享给上面那个服务账号（Editor 权限）——Sheets API 的权限看 Drive 层分享设置，不看 IAM role，服务账号不管挂什么角色，没被分享这张表就读写不了。
 - **线上服务**：`https://draye-mvp-373319016662.us-central1.run.app`，Cloud Run，us-central1。`SCHEDULER_SECRET` 环境变量给 Cloud Scheduler 用（见 `src/auth.ts` 的 `requireAuth`）。
-- **Cloud Scheduler**：`draye-track-all` 任务，每 6 小时调一次 `/api/tracking/trigger`。
-- **GitHub**：`https://github.com/zexingtang/draye-mvp`，已配置为 `origin` remote，本地已经提交过两次，**推送这个环境的自动模式分类器会拦，用户自己在本地终端跑**（`git push -u origin master`）。
+- **Cloud Scheduler**：`draye-track-all` 任务，抓取间隔现在是通过 Tracking 页面的 Schedule 下拉菜单真实控制的（1/2/4/8 小时可选，`src/scheduler.ts`），不是写死的。
+- **监控报警**：Cloud Monitoring，邮箱通知渠道 + 三条规则（服务连不上/5xx/爬虫失败率过高），细节见 TASKS.md 对应章节。
+- **给新客户开通**：`scripts/onboard-customer.ps1`——一条命令建 Sheet、部署独立 Cloud Run 服务、建独立 Scheduler 任务。现在是"一个客户一套部署"，不是多租户共用一套服务。
+- **GitHub**：`https://github.com/zexingtang/draye-mvp`，已配置为 `origin` remote，本地已经提交过三次，**推送这个环境的自动模式分类器会拦，用户自己在本地终端跑**（`git push -u origin master`）。
 
 ## 进度
 

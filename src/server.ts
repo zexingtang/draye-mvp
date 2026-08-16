@@ -265,10 +265,20 @@ app.post('/api/tracking/trigger', async (_req, res) => {
       };
     });
 
+    // 报警信号：算"非'查无此箱'原因"的失败率——箱号本身查不到是正常业务情况(箱子可能已经不在
+    // BNSF 系统里了)，但如果一大批箱号都因为别的原因(超时、页面结构变了、站点连不上)查询失败，
+    // 大概率是爬虫本身坏了，需要人去看。这行日志会被 Cloud Monitoring 的报警规则匹配到，发邮件通知。
+    const realErrors = results.filter((r) => r.error && r.error !== 'Container not found in results').length;
+    if (results.length > 0 && realErrors / results.length > 0.2) {
+      console.error(
+        `[ALERT] BNSF crawl failure rate high: ${realErrors}/${results.length} containers errored for reasons other than "not found" — crawler may be broken`
+      );
+    }
+
     await saveRecords(updated);
     res.json({ queried: results.length });
   } catch (err) {
-    console.error('[server] trigger failed:', err);
+    console.error('[ALERT] BNSF crawl trigger failed entirely:', err);
     res.status(500).json({ error: err instanceof Error ? err.message : 'trigger failed' });
   }
 });

@@ -140,6 +140,20 @@ Onboarding 表格（v1/v2，见下面）里 Custom Columns 那个 Step 3，客�
 - [x] **前端去掉 `setInterval`/`localStorage` 那套** —— `TrackingModule.tsx` 的 Schedule 相关状态全部改成从 `useSchedule.ts`（新 hook）读服务器真实状态，选项从 `[1,3,6,8]` 改成用户要求的 `[1,2,4,8]`。
 - [x] **端到端测试过，不是只测通接口**：本地浏览器里点"Every 1 hour"，直接用 `gcloud scheduler jobs describe` 确认云端任务的 cron 真的变成了 `0 */1 * * *`；点"Stop Schedule"，确认任务状态变成 `PAUSED`。两边都对得上，不是界面自己骗自己。
 
+## 监控报警 + 一键开通客户脚本（当前状态，已测）
+
+- [x] **监控报警** —— Cloud Monitoring，一个邮箱通知渠道（发到 fallinto2@gmail.com，以后换公司邮箱直接改这个渠道就行）+ 三条报警规则：
+  1. **服务整体连不上**（uptime check，每 5 分钟从外部探测一次首页，连续失败触发）
+  2. **Cloud Run 返回 5xx**（请求错误率异常）
+  3. **爬虫失败率过高**（应用层信号——`server.ts` 的 `/api/tracking/trigger` 现在会算"非'查无此箱'原因导致的失败"占比，超过 20% 就打一行 `[ALERT]` 开头的日志，Cloud Monitoring 用日志匹配规则抓这行日志触发报警。区分"箱号本身没查到"和"爬虫真的坏了"很重要——前者是正常业务情况，天天都有，不该报警）
+  
+  三条规则和通知渠道都用 `gcloud alpha monitoring` 系列命令建的（第一次用需要装 `gcloud components install alpha`）。**如实说明测试程度**：规则配置本身核对过（`gcloud alpha monitoring policies list` 确认三条都 enabled、都关联到正确的通知渠道），但没有真的制造一次故障去验证邮件确实发得出来——不想为了测试真的把服务弄挂或者伪造大量抓取失败。如果想更放心，可以手动跑 `gcloud alpha monitoring policies test` 或者真等一次意外发生时确认。
+- [x] **一键开通客户脚本**（`scripts/onboard-customer.ps1` + `src/dev/provision-sheet.ts`）—— 把之前手动跑的一整套 gcloud 命令（建 Sheet、写入账号、分享给服务账号、部署 Cloud Run、建 Scheduler 任务）打包成一条命令：
+  ```powershell
+  .\scripts\onboard-customer.ps1 -CompanyName "客户公司名" -Username admin -Password xxxx -ScheduleHours 4
+  ```
+  当前架构是"一个客户一套部署"（独立 Sheet + 独立 Cloud Run 服务 + 独立 Scheduler 任务），公司名会转成 slug 作为服务名/任务名的一部分。**真的端到端测试过，不是只测了语法**：用一个假客户"Test Onboard Co"完整跑了一遍——建 Sheet、部署服务、建定时任务、登录验证账号密码正确，全部成功之后把这些测试资源（Cloud Run 服务、Scheduler 任务、两个测试 Sheet）都删掉/清理了，不会留在项目里当垃圾。过程中还真的抓到一个 bug 并修了：PowerShell 脚本开头设了 `$ErrorActionPreference = "Stop"`，检查"定时任务是否已存在"这一步用 `gcloud scheduler jobs describe` 在任务不存在时会返回非零退出码，这个设置会把这种预期内的失败也升级成终止错误，脚本直接跑挂——改成 `try/catch` 接住就好了。
+
 ## 明确排除在这版之外
 
 Dispatch、Invoice（客户可见）、Driver App、UP/CNHAR carrier、多租户账号系统、计费系统 —— 这些不是"以后要做的下一步"，是这版 MVP 有意不做的范围，不要在做当前任务时顺手把它们加回来。
