@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -34,11 +34,16 @@ interface TrackingModuleProps {
   onCompleteContainer: (containerNumber: string) => Promise<void>;
   onReopenContainer: (containerNumber: string) => Promise<void>;
   onSaveColumns: (columns: ColumnDef[]) => Promise<void>;
+  scheduleHours: number | null;
+  scheduleEnabled: boolean;
+  scheduleUpdating: boolean;
+  onSetSchedule: (hours: number) => Promise<void>;
+  onStopSchedule: () => Promise<void>;
 }
 
 type ViewMode = 'active' | 'history';
 
-const SCHEDULE_OPTIONS = [1, 3, 6, 8];
+const SCHEDULE_OPTIONS = [1, 2, 4, 8];
 
 /** "0501" -> "05:01"。只处理刚好 4 位数字的情况，其他格式（已经带冒号、carrier 给的格式不一样）原样返回，不瞎改。 */
 function formatEtaTime(value: string): string {
@@ -105,6 +110,11 @@ export function TrackingModule({
   onCompleteContainer,
   onReopenContainer,
   onSaveColumns,
+  scheduleHours,
+  scheduleEnabled,
+  scheduleUpdating,
+  onSetSchedule,
+  onStopSchedule,
 }: TrackingModuleProps) {
   const [viewMode, setViewMode] = useState<ViewMode>('active');
   const [searchTerm, setSearchTerm] = useState('');
@@ -112,16 +122,11 @@ export function TrackingModule({
   const [columnSettingsOpen, setColumnSettingsOpen] = useState(false);
   const [sortBy, setSortBy] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
-  const [scheduleHours, setScheduleHours] = useState<number | null>(() => {
-    const saved = localStorage.getItem('tracking_schedule_hours');
-    return saved ? parseInt(saved) : null;
-  });
   const [showScheduleMenu, setShowScheduleMenu] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [completingId, setCompletingId] = useState<string | null>(null);
   const [reopeningId, setReopeningId] = useState<string | null>(null);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const confirmResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   /** 不用嵌套的 setState 写法（在 setSortBy 的 updater 里调 setSortDir）——React 为了检测
@@ -136,35 +141,6 @@ export function TrackingModule({
       setSortDir('asc');
     }
   };
-
-  const startSchedule = useCallback(
-    (hours: number) => {
-      if (timerRef.current) clearInterval(timerRef.current);
-      setScheduleHours(hours);
-      localStorage.setItem('tracking_schedule_hours', String(hours));
-      timerRef.current = setInterval(() => {
-        onTriggerTrackAll();
-      }, hours * 60 * 60 * 1000);
-    },
-    [onTriggerTrackAll]
-  );
-
-  const stopSchedule = useCallback(() => {
-    if (timerRef.current) clearInterval(timerRef.current);
-    timerRef.current = null;
-    setScheduleHours(null);
-    localStorage.removeItem('tracking_schedule_hours');
-  }, []);
-
-  useEffect(() => {
-    const saved = localStorage.getItem('tracking_schedule_hours');
-    if (saved) startSchedule(parseInt(saved));
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-      if (confirmResetRef.current) clearTimeout(confirmResetRef.current);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   /** 点一下变成"确认删除"态（3 秒内没再点会自动取消），再点一下才真的删——不用原生 confirm()。 */
   const handleDeleteClick = useCallback(
@@ -278,14 +254,15 @@ export function TrackingModule({
                 <div className="relative">
                   <button
                     onClick={() => setShowScheduleMenu(!showScheduleMenu)}
-                    className={`px-4 py-2 rounded-lg transition-colors flex items-center gap-2 text-sm font-medium ${
-                      scheduleHours
+                    disabled={scheduleUpdating}
+                    className={`px-4 py-2 rounded-lg transition-colors flex items-center gap-2 text-sm font-medium disabled:opacity-50 ${
+                      scheduleEnabled && scheduleHours
                         ? 'bg-amber-50 text-amber-700 border border-amber-300 hover:bg-amber-100'
                         : 'border border-slate-300 text-slate-700 hover:bg-slate-50'
                     }`}
                   >
-                    <Clock className="w-4 h-4" />
-                    {scheduleHours ? `Every ${scheduleHours}h` : 'Schedule'}
+                    {scheduleUpdating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Clock className="w-4 h-4" />}
+                    {scheduleEnabled && scheduleHours ? `Every ${scheduleHours}h` : 'Schedule'}
                   </button>
                   {showScheduleMenu && (
                     <>
@@ -296,26 +273,28 @@ export function TrackingModule({
                           <button
                             key={h}
                             onClick={() => {
-                              startSchedule(h);
+                              onSetSchedule(h);
                               setShowScheduleMenu(false);
                             }}
-                            className={`w-full px-4 py-2 text-left text-sm transition-colors flex items-center gap-2 ${
-                              scheduleHours === h ? 'bg-amber-50 text-amber-700 font-medium' : 'text-slate-700 hover:bg-slate-50'
+                            disabled={scheduleUpdating}
+                            className={`w-full px-4 py-2 text-left text-sm transition-colors flex items-center gap-2 disabled:opacity-50 ${
+                              scheduleEnabled && scheduleHours === h ? 'bg-amber-50 text-amber-700 font-medium' : 'text-slate-700 hover:bg-slate-50'
                             }`}
                           >
                             <Play className="w-3.5 h-3.5" />
                             Every {h} {h === 1 ? 'hour' : 'hours'}
                           </button>
                         ))}
-                        {scheduleHours && (
+                        {scheduleEnabled && (
                           <>
                             <div className="my-1 border-t border-slate-200" />
                             <button
                               onClick={() => {
-                                stopSchedule();
+                                onStopSchedule();
                                 setShowScheduleMenu(false);
                               }}
-                              className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50 transition-colors flex items-center gap-2"
+                              disabled={scheduleUpdating}
+                              className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50 transition-colors flex items-center gap-2 disabled:opacity-50"
                             >
                               <Square className="w-3.5 h-3.5" />
                               Stop Schedule

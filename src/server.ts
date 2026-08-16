@@ -18,6 +18,7 @@ import {
 } from './store.js';
 import { BNSFCrawler } from './carriers/bnsf/index.js';
 import { loadAccount, createSession, isValidSession, destroySession, parseCookies, SESSION_COOKIE } from './auth.js';
+import { getSchedule, setScheduleHours, pauseSchedule, SCHEDULE_HOUR_OPTIONS } from './scheduler.js';
 
 const app = express();
 app.use(express.json());
@@ -81,6 +82,43 @@ app.get('/api/auth/session', async (req, res) => {
 
 app.use('/api/tracking', requireAuth);
 app.use('/api/columns', requireAuth);
+app.use('/api/schedule', requireAuth);
+
+// ---------------------------------------------------------------------------
+// Schedule —— 真正的服务器端定时任务(Cloud Scheduler)，不是浏览器 setInterval。
+// 客户在界面上选 1/2/4/8 小时，改的是云端那个定时任务的 cron 表达式，关掉浏览器也照常跑。
+// ---------------------------------------------------------------------------
+
+app.get('/api/schedule', async (_req, res) => {
+  try {
+    res.json(await getSchedule());
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to read schedule' });
+  }
+});
+
+app.put('/api/schedule', async (req, res) => {
+  const { hours } = req.body as { hours?: unknown };
+  if (typeof hours !== 'number' || !(SCHEDULE_HOUR_OPTIONS as readonly number[]).includes(hours)) {
+    res.status(400).json({ error: `hours must be one of ${SCHEDULE_HOUR_OPTIONS.join(', ')}` });
+    return;
+  }
+  try {
+    await setScheduleHours(hours);
+    res.json(await getSchedule());
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to update schedule' });
+  }
+});
+
+app.delete('/api/schedule', async (_req, res) => {
+  try {
+    await pauseSchedule();
+    res.json(await getSchedule());
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to pause schedule' });
+  }
+});
 
 // ---------------------------------------------------------------------------
 // Tracking records

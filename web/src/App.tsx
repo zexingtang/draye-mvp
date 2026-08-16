@@ -6,6 +6,7 @@ import { LoginPage } from './components/LoginPage';
 import { useTrackingRecords } from './hooks/useTrackingRecords';
 import { useColumns } from './hooks/useColumns';
 import { useAuth } from './hooks/useAuth';
+import { useSchedule } from './hooks/useSchedule';
 
 type Tab = 'dashboard' | 'tracking';
 
@@ -25,15 +26,24 @@ export default function App() {
     reopenContainer,
   } = useTrackingRecords();
   const { columns, saveColumns, refetch: refetchColumns } = useColumns();
+  const {
+    hours: scheduleHours,
+    enabled: scheduleEnabled,
+    updating: scheduleUpdating,
+    refetch: refetchSchedule,
+    setSchedule,
+    stopSchedule,
+  } = useSchedule();
 
-  // 登录接口和 tracking/columns 接口是独立的 hook，登录成功之后需要主动重新拉一次数据——
+  // 登录接口和 tracking/columns/schedule 接口是独立的 hook，登录成功之后需要主动重新拉一次数据——
   // 否则页面挂载时(还没登录)那次失败的请求(401)会一直留着当成"出错了"展示给用户。
   useEffect(() => {
     if (loggedIn) {
       refetchTracking();
       refetchColumns();
+      refetchSchedule();
     }
-  }, [loggedIn, refetchTracking, refetchColumns]);
+  }, [loggedIn, refetchTracking, refetchColumns, refetchSchedule]);
 
   // Completed(已 dispatch)的箱号从 Tracking 的"Active"视图和 Dashboard 统计里排除，只在 History 里看得到。
   const activeRecords = useMemo(() => records.filter((r) => !r.completedAt), [records]);
@@ -100,6 +110,11 @@ export default function App() {
             onCompleteContainer={completeContainer}
             onReopenContainer={reopenContainer}
             onSaveColumns={saveColumns}
+            scheduleHours={scheduleHours}
+            scheduleEnabled={scheduleEnabled}
+            scheduleUpdating={scheduleUpdating}
+            onSetSchedule={setSchedule}
+            onStopSchedule={stopSchedule}
           />
         )}
       </main>

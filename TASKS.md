@@ -117,6 +117,29 @@ Onboarding 表格（v1/v2，见下面）里 Custom Columns 那个 Step 3，客�
 - [x] **把本地测试数据搬进新 Sheet**（`src/dev/migrate-local-to-sheet.ts`，一次性脚本，跑完可以删）—— 56 个真实箱号记录、14 个列配置（含用户自己调过的显示/隐藏）、Newgen/admin/hermes 测试账号，全部原样搬过去，没有丢数据。
 - [x] **端到端验证过**：curl 测过登录/读 tracking/读 columns/reopen 写操作，浏览器里也登录看过 Dashboard，数据跟本地版一致（56 个箱号、18 active、1 个 LFD today）。
 
+## 部署到 Cloud Run + Cloud Scheduler（当前状态，线上已跑通）
+
+- [x] **正式部署**——服务地址 `https://draye-mvp-373319016662.us-central1.run.app`，跑在 `draye-crawler` 服务账号上，2Gi 内存，300s 超时（batch 抓取需要时间，超时给够）。单个 Cloud Run 服务同时 serve 前端静态文件和 `/api/*`，没有另外起前端托管——`server.ts` 在所有 API 路由之后加了 `express.static` + SPA fallback，只有 `web/dist` 存在时才会命中这条路径，本地开发（Vite 自己起 5173）不受影响。
+- [x] **Dockerfile**——三段式构建：前端(Vite build)、后端(tsc build)、运行时用 Microsoft 官方 Playwright 镜像（`mcr.microsoft.com/playwright:v1.62.1-noble`，tag 必须跟 `npm ls playwright` 解析出的版本对上）,浏览器/系统依赖都已经装好,不需要额外跑 `playwright install`。
+- [x] **Cloud Scheduler 定时任务**（`draye-track-all`，每 6 小时跑一次 `POST /api/tracking/trigger`）——问题：这个接口原来要求登录 session cookie,定时任务没有浏览器 session 走不通。解法：`requireAuth` 中间件加了个口子,配了 `SCHEDULER_SECRET` 环境变量的话,请求带对 `X-Scheduler-Secret` header 就放行,不用 session。本地不配这个环境变量就完全没这个后门,不影响正常登录鉴权。
+- [x] **线上端到端验证过**（不是只测通了部署,是真的测过完整链路）：登录、读数据、手动触发 Track All（Playwright 在容器里真的跑起来了,56 个箱号全部抓取成功,结果写回 Sheet）、Cloud Scheduler 手动触发一次也验证过完整走了一遍（日志里看到 `Google-Cloud-Scheduler` 的请求打到服务上,返回 200,数据时间戳也刷新了）。
+
+**部署过程踩的坑**（都已解决,记录下来避免下次重复排查）：
+- `.gitignore` 里 `*.html` 写得太宽,把 `web/index.html` 也一起排除了,导致 Cloud Build 打包源码时漏掉这个文件,前端编译报"找不到入口"——改成只匹配 `debug-*.html`/`debug-*.png` 这种更精确的命名。
+- 本机 `gcloud` CLI 装的 Python 是 3.9,新版 `gcloud run deploy` 命令模块用了 3.9 不支持的语法,直接崩溃加载不了——用 `CLOUDSDK_PYTHON` 环境变量指向机器上装好的 Python 3.11 就解决了。
+- 项目默认的 Compute 服务账号（Cloud Build 用它跑构建）缺两个 IAM 权限：读取上传到 GCS 的源码包（`roles/storage.objectViewer`）、推送镜像到 Artifact Registry（`roles/artifactregistry.writer`）——新项目这两个权限不是默认就有的,手动补上了。
+- Cloud Scheduler 任务刚创建完立刻手动触发,请求没有真的发出去（日志也没有报错）,等了一分多钟再触发一次就正常了——像是新建任务有个生效延迟,不是配置问题。
+
+## 定时任务改成真的服务器端可控（当前状态，已测）
+
+发现了一个**真的 bug**，不是新需求：界面上 Tracking 页那个 Schedule 下拉菜单（1/3/6/8 小时）一直是从旧仓库直接搬过来的浏览器 `setInterval` 实现——只有那个浏览器标签页开着才会跑，关掉标签页、合上电脑，定时查询就完全停了。客户会以为"设置好了就自动跑"，实际上不是，这个必须在真正接客户之前修，用户明确要求了。
+
+- [x] **`src/scheduler.ts`** —— 用 `googleapis` 包自带的 `cloudscheduler` v1 客户端（不用额外装新依赖，`sheets`/`drive` 也是这个包提供的，风格统一），直接读写部署时创建的那个 Cloud Scheduler 任务（`draye-track-all`）的 cron 表达式和启用/暂停状态。认证跟 Sheets 那套一样走 ADC。
+- [x] **新增 `GET/PUT/DELETE /api/schedule`** —— 客户在界面上选 1/2/4/8 小时，实际改的是云端那个定时任务的 cron 表达式（`0 */N * * *`），不是本地状态。`PUT` 只接受 1/2/4/8，其他值直接拒绝。
+- [x] **服务账号加了 `roles/cloudscheduler.admin`** —— `draye-crawler` 这个服务账号原来只有权限跑爬虫、读写 Sheet，现在还需要能改 Cloud Scheduler 任务的配置。
+- [x] **前端去掉 `setInterval`/`localStorage` 那套** —— `TrackingModule.tsx` 的 Schedule 相关状态全部改成从 `useSchedule.ts`（新 hook）读服务器真实状态，选项从 `[1,3,6,8]` 改成用户要求的 `[1,2,4,8]`。
+- [x] **端到端测试过，不是只测通接口**：本地浏览器里点"Every 1 hour"，直接用 `gcloud scheduler jobs describe` 确认云端任务的 cron 真的变成了 `0 */1 * * *`；点"Stop Schedule"，确认任务状态变成 `PAUSED`。两边都对得上，不是界面自己骗自己。
+
 ## 明确排除在这版之外
 
 Dispatch、Invoice（客户可见）、Driver App、UP/CNHAR carrier、多租户账号系统、计费系统 —— 这些不是"以后要做的下一步"，是这版 MVP 有意不做的范围，不要在做当前任务时顺手把它们加回来。

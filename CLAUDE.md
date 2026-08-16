@@ -62,9 +62,13 @@
 
 ## 基础设施
 
-- **GCP 项目**：`draye-mvp`（个人账号 fallinto2@gmail.com 下）。Sheets API + Drive API 已启用。
-- **服务账号**：`draye-crawler@draye-mvp.iam.gserviceaccount.com` —— 这个 org 禁止下载服务账号密钥文件，认证统一走 ADC（本地开发用 `gcloud auth application-default login`，Cloud Run 部署后直接把这个服务账号挂在服务上，不需要密钥文件）。以后需要客户分享 Drive 文件夹时，分享给这个邮箱。
-- **GitHub**：`https://github.com/zexingtang/draye-mvp`，已配置为 `origin` remote，**还没有推送过**——按约定，提交/推送需要用户明确说"可以了"才做。
+- **GCP 项目**：`draye-mvp`（个人账号 fallinto2@gmail.com 下）。Sheets/Drive/Run/Build/Artifact Registry/Scheduler API 都已启用。
+- **服务账号**：`draye-crawler@draye-mvp.iam.gserviceaccount.com` —— 这个 org 禁止下载服务账号密钥文件，认证统一走 ADC（本地开发用 `gcloud auth application-default login`，Cloud Run 部署后直接把这个服务账号挂在服务上，不需要密钥文件）。Cloud Run 服务本身也是用这个账号跑的。
+- **本地 ADC 认证走的是自建 OAuth 客户端，不是 gcloud 自带的**——`gcloud auth application-default login` 默认用 Google 自己那个共享 OAuth 客户端，对 Sheets/Drive 这类"敏感" scope 没走完 Google 的验证流程，会被直接拒绝（不是"未验证应用"警告页那种能点"继续"的，是硬拒绝）。解法：在 Cloud Console 自己建一个 Desktop 类型的 OAuth 客户端（当前叫 "Draye"，同意屏幕设成"外部+测试"，测试用户加了 fallinto2@gmail.com），登录命令带 `--client-id-file` 指向这个客户端的 JSON。存储用的 Sheet ID 在 `.env` 的 `SHEET_ID`。
+- **正式存储**：一个 Google Sheet（`Draye Tracking Data`），三个 tab（Tracking/Columns/Account），已经分享给上面那个服务账号（Editor 权限）——Sheets API 的权限看 Drive 层分享设置，不看 IAM role，服务账号不管挂什么角色，没被分享这张表就读写不了。
+- **线上服务**：`https://draye-mvp-373319016662.us-central1.run.app`，Cloud Run，us-central1。`SCHEDULER_SECRET` 环境变量给 Cloud Scheduler 用（见 `src/auth.ts` 的 `requireAuth`）。
+- **Cloud Scheduler**：`draye-track-all` 任务，每 6 小时调一次 `/api/tracking/trigger`。
+- **GitHub**：`https://github.com/zexingtang/draye-mvp`，已配置为 `origin` remote，本地已经提交过两次，**推送这个环境的自动模式分类器会拦，用户自己在本地终端跑**（`git push -u origin master`）。
 
 ## 进度
 
