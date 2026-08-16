@@ -1,0 +1,17 @@
+node_modules/
+dist/
+.env
+.env.local
+
+# 服务账号密钥之类的凭证——目前这个目录里的文件是空的（org 策略不允许下载 key，见
+# CLAUDE.md），但既然叫 secrets 就不该有任何机会被跟踪进版本库
+secrets/
+
+# 临时本地数据存储（见 src/store.ts 顶部注释——过渡方案，最终数据活在客户的 Sheet 里）
+data/
+
+# 调试快照（旧仓库里 UP 爬虫留了几十个这种文件，教训：不要让它们进版本库）
+*.png
+*.html
+*-error-*.log
+*-completed-*.log
