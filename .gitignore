@@ -10,8 +10,11 @@ secrets/
 # 临时本地数据存储（见 src/store.ts 顶部注释——过渡方案，最终数据活在客户的 Sheet 里）
 data/
 
-# 调试快照（旧仓库里 UP 爬虫留了几十个这种文件，教训：不要让它们进版本库）
-*.png
-*.html
+# 调试快照（旧仓库里 UP 爬虫留了几十个这种文件，教训：不要让它们进版本库）——
+# 之前这里写的是不限目录的 *.png/*.html，结果把 web/index.html 也一起挡了，
+# Cloud Build 打包源码时会跟着漏掉这个文件，导致 Vite 找不到构建入口。改成只匹配
+# debug 输出会用的文件名前缀，不要再写不限目录的裸通配符。
+debug-*.png
+debug-*.html
 *-error-*.log
 *-completed-*.log

@@ -106,6 +106,17 @@ Onboarding 表格（v1/v2，见下面）里 Custom Columns 那个 Step 3，客�
 - [x] **"Powered by Drayease" 挪回侧边栏**，还是放在公司名（"Newgen"）下面那行小字——上一轮改成了页面右上角固定角标，用户看完觉得原来的位置更好，改回去了。
 - [x] **Dashboard 加了"Tracking"小标题** —— 那四张卡片（Total/Active/LFD Today/Unknown）都是 tracking 相关的指标，用户希望客户一眼能看出这几张卡片是"Tracking"这个模块的，不是笼统的公司整体数据。加在欢迎语和卡片之间，一行小号大写字，不占地方。
 
+## 存储正式切到 Google Sheets（当前状态，已测）
+
+之前一直卡在 gcloud 认证 scope 问题，这次真正解决了——根因不是 scope 参数写错，是 **gcloud 自带的共享 OAuth 客户端对 Sheets/Drive 这类"敏感"scope 没有走完 Google 的验证流程，Google 直接整个拒绝**（不是显示"未验证应用"警告页那种可以点"继续"的拒绝，是硬拒绝）。解法：自己在 Cloud Console 建一个 OAuth 客户端（Desktop app 类型，OAuth 同意屏幕设成"外部+测试"、把自己的账号加进测试用户），用 `--client-id-file` 指向这个自建客户端再跑 `gcloud auth application-default login`，这样走的是自己的 App，Google 只会弹"未验证应用"警告（可以点 Advanced 继续），不会硬拒绝。
+
+- [x] **`git init` 的仓库第一次提交 + 配置好 push** —— 41 个文件，`secrets/` 提前加进 `.gitignore`（当时是空文件，但目录名叫 secrets 就不该有机会被跟踪进去）。`git push` 被这个环境的自动模式分类器挡了（跟之前 gcloud auth 命令一样的限制），用户自己在本地终端跑的。
+- [x] **建了正式的存储用 Google Sheet**（`src/dev/setup-sheet.ts`，一次性脚本）—— 一个 Sheet 三个 tab：`Tracking`/`Columns`/`Account`，各自带表头。Sheet ID 存在 `.env` 的 `SHEET_ID`。
+- [x] **`store.ts` 从本地 JSON 文件改成读写这个 Sheet** —— `sheets/client.ts` 提供通用的 `readRows`/`overwriteRows`（先 clear 再 update，避免行数变少留脏数据；写用 `RAW` 模式不触发 Sheets 自动类型转换，比如箱号里的日期字符串"08/17/26"不会被误判成真的日期类型；读用 `UNFORMATTED_VALUE` 保证布尔/数字读回来是原始类型不是字符串）。老的 `sheets/writer.ts`（只支持 7 个字段的窄 schema，早期写的，一直没真正接入 server.ts）整个删掉，被这次的新实现取代。
+- [x] **`auth.ts` 的账号信息也从本地文件改成读 Sheet 的 Account tab** —— 这是这次真正要解决的问题：之前登录账号存在本地 JSON 里，部署到 Cloud Run 后容器一重启文件就没了，密码会被重置成默认值。现在账号跟 tracking/columns 数据一样在 Sheet 里，不会因为重新部署/冷启动丢失。
+- [x] **把本地测试数据搬进新 Sheet**（`src/dev/migrate-local-to-sheet.ts`，一次性脚本，跑完可以删）—— 56 个真实箱号记录、14 个列配置（含用户自己调过的显示/隐藏）、Newgen/admin/hermes 测试账号，全部原样搬过去，没有丢数据。
+- [x] **端到端验证过**：curl 测过登录/读 tracking/读 columns/reopen 写操作，浏览器里也登录看过 Dashboard，数据跟本地版一致（56 个箱号、18 active、1 个 LFD today）。
+
 ## 明确排除在这版之外
 
 Dispatch、Invoice（客户可见）、Driver App、UP/CNHAR carrier、多租户账号系统、计费系统 —— 这些不是"以后要做的下一步"，是这版 MVP 有意不做的范围，不要在做当前任务时顺手把它们加回来。

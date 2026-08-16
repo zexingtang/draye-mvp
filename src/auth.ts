@@ -1,17 +1,15 @@
 /**
  * 极简账号系统——每个部署只有一个客户公司、一个共享的管理员账号（不是多用户系统）。
- * 账号信息存在本地文件（跟 store.ts 的 tracking.json/columns.json 同一套"临时本地存储"模式，
- * 以后要迁移到客户自己的存储时，换掉这个文件的读写实现就行，上层接口不用动）。
+ * 账号信息存在跟 tracking/columns 同一个 Google Sheet 的 Account tab 里（见 store.ts /
+ * sheets/client.ts）——不用本地文件，Cloud Run 重新部署/冷启动不会把账号密码冲掉。
  *
  * Session 用最简单的方式实现：内存里存一个 token 集合 + httpOnly cookie，没有用 JWT 或者
  * 第三方 session 库——单账号、单机部署，不需要那么复杂，重启服务会清空所有 session（等于强制重新登录，可接受）。
  */
 import { randomBytes } from 'crypto';
-import { mkdir, readFile, writeFile } from 'fs/promises';
-import path from 'path';
+import { readRows, cellToText } from './sheets/client.js';
 
-const DATA_DIR = path.join(process.cwd(), 'data');
-const ACCOUNT_FILE = path.join(DATA_DIR, 'account.json');
+const ACCOUNT_TAB = 'Account';
 
 export interface Account {
   companyName: string;
@@ -19,20 +17,15 @@ export interface Account {
   password: string;
 }
 
-async function ensureAccountFile(): Promise<void> {
-  await mkdir(DATA_DIR, { recursive: true });
-  try {
-    await readFile(ACCOUNT_FILE, 'utf-8');
-  } catch {
-    const fallback: Account = { companyName: 'Draye', username: 'admin', password: 'changeme' };
-    await writeFile(ACCOUNT_FILE, JSON.stringify(fallback, null, 2), 'utf-8');
-  }
-}
-
 export async function loadAccount(): Promise<Account> {
-  await ensureAccountFile();
-  const raw = await readFile(ACCOUNT_FILE, 'utf-8');
-  return JSON.parse(raw) as Account;
+  const rows = await readRows(ACCOUNT_TAB);
+  const row = rows[0];
+  if (!row) throw new Error(`Account tab 里没有账号数据——检查 SHEET_ID 指向的表是不是用 setup-sheet.ts 建的`);
+  return {
+    companyName: cellToText(row[0]) ?? 'Draye',
+    username: cellToText(row[1]) ?? 'admin',
+    password: cellToText(row[2]) ?? '',
+  };
 }
 
 export const SESSION_COOKIE = 'draye_session';

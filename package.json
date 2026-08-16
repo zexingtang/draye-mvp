@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "verify:bnsf": "tsx src/dev/verify-bnsf.ts",
-    "verify:sheets": "tsx src/dev/verify-sheets.ts",
+    "setup:sheet": "tsx src/dev/setup-sheet.ts",
     "server": "tsx watch src/server.ts",
     "gen:onboarding": "tsx src/dev/generate-onboarding-form.ts",
     "build": "tsc",

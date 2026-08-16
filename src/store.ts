@@ -1,17 +1,16 @@
 /**
- * 临时本地存储 —— 两个 JSON 文件（tracking 数据 + 列显示配置）。
- *
- * 这不是最终方案，最终数据应该活在客户自己的 Google Sheet 里（见 CLAUDE.md 的核心架构原则）。
- * 但 Sheets 那边的 gcloud 认证还没弄好，先用这个文件把"后端真的能跑起来"这件事跑通，
- * 不卡在认证问题上。以后接 Sheets 时，只需要把这个文件里的 load / save 函数
- * 换成读写 sheets/writer.ts，server.ts 里调用这两个函数的地方完全不用改。
+ * 存储层——数据活在客户自己的 Google Sheet 里（见 CLAUDE.md 的核心架构原则），不在我们自己的
+ * 数据库/项目里长期存客户数据。Sheet 里有三个 tab：Tracking / Columns / Account，读写细节在
+ * `sheets/client.ts`。表本身用 `src/dev/setup-sheet.ts` 建一次，ID 存在 .env 的 SHEET_ID 里。
  *
  * 简化记录：曾经做过"客户自定义列 + 可复用下拉字段"这一整套（customFields/Resources），
  * 后来决定不做定制化，改成"爬虫能抓到什么字段就展示什么字段，客户只能选择显示/隐藏"——
  * 更简单，不需要 onboarding 收集列定义，也不需要维护 Resources 系统。
  */
-import { mkdir, readFile, writeFile } from 'fs/promises';
-import path from 'path';
+import { overwriteRows, readRows, cellToText } from './sheets/client.js';
+
+const TRACKING_TAB = 'Tracking';
+const COLUMNS_TAB = 'Columns';
 
 /** 目前只支持 BNSF，结构上留出扩展空间——加新 carrier 时改这一个数组就够了。 */
 export const SUPPORTED_CARRIERS = ['BNSF'] as const;
@@ -76,56 +75,76 @@ export const KNOWN_COLUMNS: ColumnDef[] = [
   { key: 'lastUpdated', label: 'Last Updated', visible: true, order: 13 },
 ];
 
-const DATA_DIR = path.join(process.cwd(), 'data');
-const TRACKING_FILE = path.join(DATA_DIR, 'tracking.json');
-const COLUMNS_FILE = path.join(DATA_DIR, 'columns.json');
+/** 跟 `setup-sheet.ts` 里 TRACKING_HEADERS 的列顺序必须一致——这里是唯一的读写入口，改列就两边一起改。 */
+function rowToRecord(row: unknown[]): TrackingRecord {
+  return {
+    id: cellToText(row[0])!,
+    containerNumber: cellToText(row[1])!,
+    carrier: cellToText(row[2])!,
+    status: (cellToText(row[3]) ?? 'UNKNOWN') as TrackingRecord['status'],
+    etaDate: cellToText(row[4]),
+    etaTime: cellToText(row[5]),
+    lastFreeDay: cellToText(row[6]),
+    chassisNumber: cellToText(row[7]),
+    lastHub: cellToText(row[8]),
+    billYN: cellToText(row[9]),
+    lotRowSpot: cellToText(row[10]),
+    destinationHub: cellToText(row[11]),
+    lockedEtnDateTime: cellToText(row[12]),
+    unitLength: cellToText(row[13]),
+    lastUpdated: cellToText(row[14]),
+    completedAt: cellToText(row[15]),
+  };
+}
 
-async function ensureFile(file: string, defaultContent: string): Promise<void> {
-  await mkdir(DATA_DIR, { recursive: true });
-  try {
-    await readFile(file, 'utf-8');
-  } catch {
-    await writeFile(file, defaultContent, 'utf-8');
-  }
+function recordToRow(r: TrackingRecord): unknown[] {
+  return [
+    r.id,
+    r.containerNumber,
+    r.carrier,
+    r.status,
+    r.etaDate ?? '',
+    r.etaTime ?? '',
+    r.lastFreeDay ?? '',
+    r.chassisNumber ?? '',
+    r.lastHub ?? '',
+    r.billYN ?? '',
+    r.lotRowSpot ?? '',
+    r.destinationHub ?? '',
+    r.lockedEtnDateTime ?? '',
+    r.unitLength ?? '',
+    r.lastUpdated ?? '',
+    r.completedAt ?? '',
+  ];
 }
 
 export async function loadRecords(): Promise<TrackingRecord[]> {
-  await ensureFile(TRACKING_FILE, '[]');
-  const raw = await readFile(TRACKING_FILE, 'utf-8');
-  const records = JSON.parse(raw) as Partial<TrackingRecord>[];
-  // 兼容老数据：补上新加的字段，缺的当 null
-  return records.map((r) => ({
-    id: r.id!,
-    containerNumber: r.containerNumber!,
-    carrier: r.carrier!,
-    status: r.status ?? 'UNKNOWN',
-    etaDate: r.etaDate ?? null,
-    etaTime: r.etaTime ?? null,
-    lastFreeDay: r.lastFreeDay ?? null,
-    chassisNumber: r.chassisNumber ?? null,
-    lastHub: r.lastHub ?? null,
-    billYN: r.billYN ?? null,
-    lotRowSpot: r.lotRowSpot ?? null,
-    destinationHub: r.destinationHub ?? null,
-    lockedEtnDateTime: r.lockedEtnDateTime ?? null,
-    unitLength: r.unitLength ?? null,
-    lastUpdated: r.lastUpdated ?? null,
-    completedAt: r.completedAt ?? null,
-  }));
+  const rows = await readRows(TRACKING_TAB);
+  return rows.filter((row) => row[0]).map(rowToRecord);
 }
 
 export async function saveRecords(records: TrackingRecord[]): Promise<void> {
-  await ensureFile(TRACKING_FILE, '[]');
-  await writeFile(TRACKING_FILE, JSON.stringify(records, null, 2), 'utf-8');
+  await overwriteRows(TRACKING_TAB, records.map(recordToRow));
+}
+
+function rowToColumn(row: unknown[]): ColumnDef {
+  return {
+    key: cellToText(row[0])!,
+    label: cellToText(row[1])!,
+    visible: row[2] === true,
+    order: typeof row[3] === 'number' ? row[3] : Number(row[3]) || 0,
+  };
+}
+
+function columnToRow(c: ColumnDef): unknown[] {
+  return [c.key, c.label, c.visible, c.order];
 }
 
 export async function loadColumns(): Promise<ColumnDef[]> {
-  await ensureFile(COLUMNS_FILE, JSON.stringify(KNOWN_COLUMNS, null, 2));
-  const raw = await readFile(COLUMNS_FILE, 'utf-8');
-  return JSON.parse(raw) as ColumnDef[];
+  const rows = await readRows(COLUMNS_TAB);
+  return rows.filter((row) => row[0]).map(rowToColumn);
 }
 
 export async function saveColumns(columns: ColumnDef[]): Promise<void> {
-  await ensureFile(COLUMNS_FILE, '[]');
-  await writeFile(COLUMNS_FILE, JSON.stringify(columns, null, 2), 'utf-8');
+  await overwriteRows(COLUMNS_TAB, columns.map(columnToRow));
 }

@@ -7,7 +7,9 @@ async function main() {
   const sheets = google.sheets({ version: 'v4', auth: client as any });
 
   const created = await sheets.spreadsheets.create({
-    requestBody: { properties: { title: 'draye-mvp test sheet (safe to delete)' } },
+    // 显式指定 tab 名字——不指定的话 Google 会按账号语言给默认名字（比如中文账号建出来的
+    // 第一个 tab 叫"工作表1"不是"Sheet1"），写入时按 'Sheet1!A1' 找不到范围就会报错。
+    requestBody: { properties: { title: 'draye-mvp test sheet (safe to delete)' }, sheets: [{ properties: { title: 'Sheet1' } }] },
   });
   const sheetId = created.data.spreadsheetId!;
   console.log('Created test sheet:', sheetId);

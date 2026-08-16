@@ -3,6 +3,8 @@
  * 前端(web/)通过 Vite dev proxy 转发 /api/* 到这里，见 web/vite.config.ts。
  */
 import 'dotenv/config';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import {
   loadRecords,
@@ -28,8 +30,16 @@ function getSessionToken(req: Request): string | null {
   return parseCookies(req.headers.cookie)[SESSION_COOKIE] ?? null;
 }
 
+/** Cloud Scheduler 定时调 /trigger 用的——它没有浏览器 session，session cookie 那套认证走不通。
+ * 只在配了 SCHEDULER_SECRET 环境变量时生效，本地开发不配就完全没这个后门。 */
+const SCHEDULER_SECRET = process.env.SCHEDULER_SECRET;
+
 function requireAuth(req: Request, res: Response, next: NextFunction): void {
   if (isValidSession(getSessionToken(req))) {
+    next();
+    return;
+  }
+  if (SCHEDULER_SECRET && req.headers['x-scheduler-secret'] === SCHEDULER_SECRET) {
     next();
     return;
   }
@@ -264,7 +274,26 @@ app.put('/api/columns', async (req, res) => {
   res.json(await loadColumns());
 });
 
-const PORT = parseInt(process.env.API_PORT || '8787');
+// ---------------------------------------------------------------------------
+// 生产环境下顺带把前端静态文件也served了——单个 Cloud Run 服务，不用另外起一个前端托管。
+// 本地开发不会命中这个分支：`npm run dev`(Vite)自己在 5173 起服务，web/dist 也不存在。
+// ---------------------------------------------------------------------------
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const WEB_DIST = path.join(__dirname, '../web/dist');
+
+app.use(express.static(WEB_DIST));
+app.get('*', (req, res, next) => {
+  if (req.path.startsWith('/api/')) {
+    next();
+    return;
+  }
+  res.sendFile(path.join(WEB_DIST, 'index.html'), (err) => {
+    if (err) next();
+  });
+});
+
+const PORT = parseInt(process.env.PORT || process.env.API_PORT || '8787');
 app.listen(PORT, () => {
   console.log(`[server] listening on http://localhost:${PORT}`);
 });
