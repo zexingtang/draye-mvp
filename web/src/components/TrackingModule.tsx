@@ -370,6 +370,9 @@ export function TrackingModule({
 
       <div className="flex-1 overflow-auto bg-slate-50 p-8">
         <div className="bg-white rounded-lg border border-slate-200 overflow-hidden">
+          {/* 列开多了表格会比容器宽——这层专门负责横向滚动，外层的 overflow-hidden 只用来裁出圆角，
+              不然之前是外层直接裁掉了多出来的列，多开几列右边的字段就直接看不见、也滚不到。 */}
+          <div className="overflow-x-auto">
           <table className="w-full">
             <thead className="bg-slate-50 border-b border-slate-200">
               <tr>
@@ -483,6 +486,7 @@ export function TrackingModule({
               )}
             </tbody>
           </table>
+          </div>
         </div>
       </div>
 
