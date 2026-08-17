@@ -69,6 +69,7 @@
 - **线上服务**：`https://draye-mvp-373319016662.us-central1.run.app`，Cloud Run，us-central1。`SCHEDULER_SECRET` 环境变量给 Cloud Scheduler 用（见 `src/auth.ts` 的 `requireAuth`）。
 - **Cloud Scheduler**：`draye-track-all` 任务，抓取间隔现在是通过 Tracking 页面的 Schedule 下拉菜单真实控制的（1/2/4/8 小时可选，`src/scheduler.ts`），不是写死的。
 - **监控报警**：Cloud Monitoring，邮箱通知渠道 + 三条规则（服务连不上/5xx/爬虫失败率过高），细节见 TASKS.md 对应章节。
+- **数据备份**：Cloud Storage bucket `draye-mvp-backups`（us-central1，90 天自动过期），每次写入 Sheet 成功后顺带把原始行数据快照过去（`src/backup.ts`，接在 `store.ts` 的 `saveRecords`/`saveColumns`）。一个 bucket 服务所有客户部署，按 SHEET_ID 分区。跟主 Sheet 是完全独立的存储/独立的失败域，Sheet 或者这个 Google 账号出问题不影响备份还在。
 - **给新客户开通**：`scripts/onboard-customer.ps1`——一条命令建 Sheet、部署独立 Cloud Run 服务、建独立 Scheduler 任务。现在是"一个客户一套部署"，不是多租户共用一套服务。
 - **GitHub**：`https://github.com/zexingtang/draye-mvp`，已配置为 `origin` remote，本地已经提交过三次，**推送这个环境的自动模式分类器会拦，用户自己在本地终端跑**（`git push -u origin master`）。
 

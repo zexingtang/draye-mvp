@@ -8,6 +8,7 @@
  * 更简单，不需要 onboarding 收集列定义，也不需要维护 Resources 系统。
  */
 import { overwriteRows, readRows, cellToText } from './sheets/client.js';
+import { backupTab } from './backup.js';
 
 const TRACKING_TAB = 'Tracking';
 const COLUMNS_TAB = 'Columns';
@@ -124,7 +125,10 @@ export async function loadRecords(): Promise<TrackingRecord[]> {
 }
 
 export async function saveRecords(records: TrackingRecord[]): Promise<void> {
-  await overwriteRows(TRACKING_TAB, records.map(recordToRow));
+  const rows = records.map(recordToRow);
+  await overwriteRows(TRACKING_TAB, rows);
+  // fire-and-forget——备份写入慢/失败不能拖慢或搞挂客户这次操作，backup.ts 自己兜底记日志报警。
+  void backupTab(TRACKING_TAB, rows);
 }
 
 function rowToColumn(row: unknown[]): ColumnDef {
@@ -146,5 +150,7 @@ export async function loadColumns(): Promise<ColumnDef[]> {
 }
 
 export async function saveColumns(columns: ColumnDef[]): Promise<void> {
-  await overwriteRows(COLUMNS_TAB, columns.map(columnToRow));
+  const rows = columns.map(columnToRow);
+  await overwriteRows(COLUMNS_TAB, rows);
+  void backupTab(COLUMNS_TAB, rows);
 }

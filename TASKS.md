@@ -181,6 +181,17 @@ Onboarding 表格（v1/v2，见下面）里 Custom Columns 那个 Step 3，客�
 - [x] **端到端验证过，不是只 `tsc` 过关**：浏览器里用客户真实账号（15 列布局，跟客户截图对得上）实测——滚动容器 `clientHeight` 646px（锁死在可视区域内，跟表格真实 `scrollHeight` 10701px 完全脱钩）；把这个容器纵向滚到底（`scrollTop = 5000`）前后，它的 `getBoundingClientRect().bottom` 都是 867px，没有随内容变化,说明横向滚动条的位置固定贴在可视区域底部，不需要先滚完整页;`<thead>` 确认是 `position: sticky`、`top: 0`，纵向滚动时表头没跟着滚走。
 - [x] **部署到生产环境** —— 提交 commit `6c86c65`，`gcloud run deploy` 到 `draye-mvp` 服务。
 
+## 数据备份（当前状态，已测）
+
+客户明确问过"数据存哪、丢了怎么办"，讨论后决定：主存储继续按方案 B 留在我们这边（不是客户自己的 Google Drive），但加一层我们自己控制、跟主 Sheet 完全独立的自动备份——这是行业里 SaaS 存储的标准做法，不是新架构。
+
+- [x] **`src/backup.ts`** —— 用 `googleapis` 包自带的 `storage` v1 客户端（跟 `scheduler.ts` 一样的思路，不装新依赖），把每次写入 Sheet 的原始行数据（跟 `sheets/client.ts` 的 rows 格式完全一致，不是解析后的业务对象，方便真出事时原样写回去恢复）快照成一份 JSON，写到 Cloud Storage bucket `draye-mvp-backups`。对象路径 `{SHEET_ID}/{tab}/{timestamp}.json`——一个 bucket 服务所有客户部署，靠 SHEET_ID 天然分区不会互相覆盖，`onboard-customer.ps1` 不用改。
+- [x] **接入点在 `store.ts` 的 `saveRecords`/`saveColumns`**，不是每个 API 端点单独调——这两个函数是所有写入 Sheet 的唯一出口（跟批量接口"一次读改存"是同一个原则），改这一处就覆盖了所有会改数据的操作。
+- [x] **fire-and-forget，不阻塞主流程**——`void backupTab(...)`，不 await。备份失败不能让客户点 Track All / 加箱号卡住或报错；`backup.ts` 自己吞掉错误，打一行 `[ALERT]` 日志——这个前缀复用了已有的 Cloud Monitoring 日志报警规则（广泛匹配 `[ALERT]`，不是只认爬虫失败那一种消息），不用为备份单独建报警规则。
+- [x] **Cloud Storage 基础设施**：bucket `draye-mvp-backups`（us-central1，uniform bucket-level access）+ 90 天自动过期的 lifecycle 规则（避免无限增长，反正 90 天前的快照实用性也低）+ `draye-crawler` 服务账号只给了 `roles/storage.objectCreator`（最小权限——只能写新对象，不能读/删/覆盖已有备份，删除交给 lifecycle 规则）。
+- [x] **端到端测过，不是只看代码**：本地起后端，用一个假箱号（`BKUPTEST0001`，不碰真实数据）触发一次 add，`gcloud storage ls` 确认真的在 bucket 里生成了对应 SHEET_ID/Tracking 路径下的快照文件，下载下来确认内容是 212 行原始数据（211 条真实客户数据 + 1 条刚加的测试箱号），格式跟 Sheet 里的行完全对得上；测完把测试箱号删掉，真实客户数据没受影响。
+- [x] **已知的取舍，不是遗漏**：`Account` tab（公司名/账号/密码）没有接入自动备份——这个 tab 目前没有任何 API 会写它（只在客户开通时写一次），丢失风险极低，真要恢复也就是重新填一次账号信息，为它加一整套备份触发点性价比不高。如果以后 Account 也能被 API 修改（比如客户能自己改密码），再补上。
+
 ## 明确排除在这版之外
 
 Dispatch、Invoice（客户可见）、Driver App、UP/CNHAR carrier、多租户账号系统、计费系统 —— 这些不是"以后要做的下一步"，是这版 MVP 有意不做的范围，不要在做当前任务时顺手把它们加回来。
