@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -14,6 +14,7 @@ import {
   Search,
   Square,
   Trash2,
+  X,
 } from 'lucide-react';
 import type { ColumnDef, TrackingRecord } from '../types/tracking';
 import { getFieldValue } from '../types/tracking';
@@ -33,6 +34,8 @@ interface TrackingModuleProps {
   onDeleteContainer: (containerNumber: string) => Promise<void>;
   onCompleteContainer: (containerNumber: string) => Promise<void>;
   onReopenContainer: (containerNumber: string) => Promise<void>;
+  onBatchDeleteContainers: (containerNumbers: string[]) => Promise<number>;
+  onBatchCompleteContainers: (containerNumbers: string[]) => Promise<number>;
   onSaveColumns: (columns: ColumnDef[]) => Promise<void>;
   scheduleHours: number | null;
   scheduleEnabled: boolean;
@@ -109,6 +112,8 @@ export function TrackingModule({
   onDeleteContainer,
   onCompleteContainer,
   onReopenContainer,
+  onBatchDeleteContainers,
+  onBatchCompleteContainers,
   onSaveColumns,
   scheduleHours,
   scheduleEnabled,
@@ -127,7 +132,17 @@ export function TrackingModule({
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [completingId, setCompletingId] = useState<string | null>(null);
   const [reopeningId, setReopeningId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [batchActing, setBatchActing] = useState(false);
+  const [confirmBatchDelete, setConfirmBatchDelete] = useState(false);
   const confirmResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const batchConfirmResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // 切到 History,或者列表刷新之后已选的箱号被删/完成了,已选状态就没意义了,清空。
+  useEffect(() => {
+    setSelectedIds(new Set());
+    setConfirmBatchDelete(false);
+  }, [viewMode]);
 
   /** 不用嵌套的 setState 写法（在 setSortBy 的 updater 里调 setSortDir）——React 为了检测
    * "返回值有没有变"会把 updater 多调一次，副作用里的 setSortDir 也跟着多触发一次，
@@ -189,6 +204,49 @@ export function TrackingModule({
     [onReopenContainer]
   );
 
+  const toggleSelect = useCallback((id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  /** Batch complete 跟单条一样不需要确认——容易撤销(History 里逐条 Reopen)。 */
+  const handleBatchComplete = useCallback(async () => {
+    const containerNumbers = records.filter((r) => selectedIds.has(r.id)).map((r) => r.containerNumber);
+    if (containerNumbers.length === 0) return;
+    setBatchActing(true);
+    try {
+      await onBatchCompleteContainers(containerNumbers);
+      setSelectedIds(new Set());
+    } finally {
+      setBatchActing(false);
+    }
+  }, [records, selectedIds, onBatchCompleteContainers]);
+
+  /** Batch delete 跟单条删除一样要二次确认（真的会丢数据），点一下进入确认态，3 秒内没再点自动取消。 */
+  const handleBatchDeleteClick = useCallback(async () => {
+    if (!confirmBatchDelete) {
+      if (batchConfirmResetRef.current) clearTimeout(batchConfirmResetRef.current);
+      setConfirmBatchDelete(true);
+      batchConfirmResetRef.current = setTimeout(() => setConfirmBatchDelete(false), 3000);
+      return;
+    }
+    if (batchConfirmResetRef.current) clearTimeout(batchConfirmResetRef.current);
+    setConfirmBatchDelete(false);
+    const containerNumbers = records.filter((r) => selectedIds.has(r.id)).map((r) => r.containerNumber);
+    if (containerNumbers.length === 0) return;
+    setBatchActing(true);
+    try {
+      await onBatchDeleteContainers(containerNumbers);
+      setSelectedIds(new Set());
+    } finally {
+      setBatchActing(false);
+    }
+  }, [confirmBatchDelete, records, selectedIds, onBatchDeleteContainers]);
+
   const visibleColumns = [...columns].filter((c) => c.visible).sort((a, b) => a.order - b.order);
   const sourceRecords = viewMode === 'active' ? records : historyRecords;
 
@@ -217,6 +275,23 @@ export function TrackingModule({
     : viewMode === 'history'
       ? [...filtered].sort((a, b) => (b.completedAt ?? '').localeCompare(a.completedAt ?? ''))
       : filtered;
+
+  // "全选"操作的是当前搜索筛选之后看得见的这些行，不是全部 active 箱号——跟大多数表格的全选习惯一致。
+  const allVisibleSelected = sorted.length > 0 && sorted.every((r) => selectedIds.has(r.id));
+  const toggleSelectAll = () => {
+    setSelectedIds((prev) => {
+      if (allVisibleSelected) {
+        const next = new Set(prev);
+        sorted.forEach((r) => next.delete(r.id));
+        return next;
+      }
+      const next = new Set(prev);
+      sorted.forEach((r) => next.add(r.id));
+      return next;
+    });
+  };
+
+  const extraColumnCount = (viewMode === 'active' ? 2 : 1) + (viewMode === 'history' ? 1 : 0);
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -369,6 +444,40 @@ export function TrackingModule({
       </div>
 
       <div className="flex-1 overflow-auto bg-slate-50 p-8">
+        {viewMode === 'active' && selectedIds.size > 0 && (
+          <div className="mb-4 flex items-center gap-3 px-4 py-2.5 bg-slate-800 text-white rounded-lg">
+            <span className="text-sm font-medium">{selectedIds.size} selected</span>
+            <div className="flex-1" />
+            <button
+              onClick={handleBatchComplete}
+              disabled={batchActing}
+              className="px-3 py-1.5 rounded-md bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 transition-colors text-sm font-medium flex items-center gap-1.5"
+            >
+              {batchActing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
+              Complete
+            </button>
+            <button
+              onClick={handleBatchDeleteClick}
+              disabled={batchActing}
+              className={`px-3 py-1.5 rounded-md disabled:opacity-50 transition-colors text-sm font-medium flex items-center gap-1.5 ${
+                confirmBatchDelete ? 'bg-red-600 hover:bg-red-700' : 'bg-white/10 hover:bg-white/20'
+              }`}
+            >
+              {batchActing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+              {confirmBatchDelete ? 'Confirm delete?' : 'Delete'}
+            </button>
+            <button
+              onClick={() => {
+                setSelectedIds(new Set());
+                setConfirmBatchDelete(false);
+              }}
+              title="Clear selection"
+              className="p-1.5 rounded-md hover:bg-white/10 transition-colors"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
         <div className="bg-white rounded-lg border border-slate-200 overflow-hidden">
           {/* 列开多了表格会比容器宽——这层专门负责横向滚动，外层的 overflow-hidden 只用来裁出圆角，
               不然之前是外层直接裁掉了多出来的列，多开几列右边的字段就直接看不见、也滚不到。 */}
@@ -376,6 +485,16 @@ export function TrackingModule({
           <table className="w-full">
             <thead className="bg-slate-50 border-b border-slate-200">
               <tr>
+                {viewMode === 'active' && (
+                  <th className="px-4 py-3 w-10">
+                    <input
+                      type="checkbox"
+                      checked={allVisibleSelected}
+                      onChange={toggleSelectAll}
+                      className="w-4 h-4 rounded border-slate-300 text-slate-800 focus:ring-slate-500 cursor-pointer"
+                    />
+                  </th>
+                )}
                 {visibleColumns.map((col) => {
                   const active = sortBy === col.key;
                   return (
@@ -402,7 +521,7 @@ export function TrackingModule({
             <tbody className="divide-y divide-slate-200">
               {loading ? (
                 <tr>
-                  <td colSpan={visibleColumns.length + 2} className="px-6 py-16 text-center">
+                  <td colSpan={visibleColumns.length + extraColumnCount} className="px-6 py-16 text-center">
                     <div className="flex flex-col items-center gap-2">
                       <Loader2 className="w-6 h-6 animate-spin text-slate-400" />
                       <span className="text-sm text-slate-500">Loading containers...</span>
@@ -411,7 +530,7 @@ export function TrackingModule({
                 </tr>
               ) : sorted.length === 0 ? (
                 <tr>
-                  <td colSpan={visibleColumns.length + 2} className="px-6 py-16 text-center text-sm text-slate-500">
+                  <td colSpan={visibleColumns.length + extraColumnCount} className="px-6 py-16 text-center text-sm text-slate-500">
                     {searchTerm
                       ? 'No containers match your search.'
                       : viewMode === 'active'
@@ -421,7 +540,17 @@ export function TrackingModule({
                 </tr>
               ) : (
                 sorted.map((record) => (
-                  <tr key={record.id} className="hover:bg-slate-50 transition-colors">
+                  <tr key={record.id} className={`hover:bg-slate-50 transition-colors ${selectedIds.has(record.id) ? 'bg-slate-50' : ''}`}>
+                    {viewMode === 'active' && (
+                      <td className="px-4 py-3">
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.has(record.id)}
+                          onChange={() => toggleSelect(record.id)}
+                          className="w-4 h-4 rounded border-slate-300 text-slate-800 focus:ring-slate-500 cursor-pointer"
+                        />
+                      </td>
+                    )}
                     {visibleColumns.map((col) => (
                       <td key={col.key} className="px-4 py-3 whitespace-nowrap">
                         {renderTrackingCell(col, record)}

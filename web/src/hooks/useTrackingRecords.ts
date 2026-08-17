@@ -26,6 +26,8 @@ export interface UseTrackingRecordsReturn {
   deleteContainer: (containerNumber: string) => Promise<void>;
   completeContainer: (containerNumber: string) => Promise<void>;
   reopenContainer: (containerNumber: string) => Promise<void>;
+  batchDeleteContainers: (containerNumbers: string[]) => Promise<number>;
+  batchCompleteContainers: (containerNumbers: string[]) => Promise<number>;
 }
 
 export function useTrackingRecords(): UseTrackingRecordsReturn {
@@ -153,6 +155,43 @@ export function useTrackingRecords(): UseTrackingRecordsReturn {
     [refetch]
   );
 
+  /** 批量操作——一次请求改完所有选中的箱号，不是循环调单条接口（避免并发读改存互相覆盖，见 server.ts 注释）。 */
+  const batchDeleteContainers = useCallback(
+    async (containerNumbers: string[]): Promise<number> => {
+      const res = await fetch('/api/tracking/containers/batch-delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ containerNumbers }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}) as { error?: string });
+        throw new Error(body.error || `POST batch-delete failed: ${res.status}`);
+      }
+      const result = (await res.json()) as { deleted: number };
+      await refetch();
+      return result.deleted;
+    },
+    [refetch]
+  );
+
+  const batchCompleteContainers = useCallback(
+    async (containerNumbers: string[]): Promise<number> => {
+      const res = await fetch('/api/tracking/containers/batch-complete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ containerNumbers }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}) as { error?: string });
+        throw new Error(body.error || `POST batch-complete failed: ${res.status}`);
+      }
+      const result = (await res.json()) as { completed: number };
+      await refetch();
+      return result.completed;
+    },
+    [refetch]
+  );
+
   useEffect(() => {
     refetch();
   }, [refetch]);
@@ -169,5 +208,7 @@ export function useTrackingRecords(): UseTrackingRecordsReturn {
     deleteContainer,
     completeContainer,
     reopenContainer,
+    batchDeleteContainers,
+    batchCompleteContainers,
   };
 }

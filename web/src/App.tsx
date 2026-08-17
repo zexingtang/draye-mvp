@@ -24,6 +24,8 @@ export default function App() {
     deleteContainer,
     completeContainer,
     reopenContainer,
+    batchDeleteContainers,
+    batchCompleteContainers,
   } = useTrackingRecords();
   const { columns, saveColumns, refetch: refetchColumns } = useColumns();
   const {
@@ -109,6 +111,8 @@ export default function App() {
             onDeleteContainer={deleteContainer}
             onCompleteContainer={completeContainer}
             onReopenContainer={reopenContainer}
+            onBatchDeleteContainers={batchDeleteContainers}
+            onBatchCompleteContainers={batchCompleteContainers}
             onSaveColumns={saveColumns}
             scheduleHours={scheduleHours}
             scheduleEnabled={scheduleEnabled}

@@ -222,6 +222,51 @@ app.post('/api/tracking/containers/:containerNumber/reopen', async (req, res) =>
   res.json(records[idx]);
 });
 
+function parseContainerNumbers(body: unknown): string[] | null {
+  const { containerNumbers } = (body ?? {}) as { containerNumbers?: unknown };
+  if (!Array.isArray(containerNumbers) || containerNumbers.length === 0) return null;
+  return containerNumbers.map((c) => String(c).toUpperCase());
+}
+
+/**
+ * 批量删除——前端多选打勾之后用这个，而不是对每个箱号分别调单条删除接口。
+ * 单条接口是"读全部 -> 改一条 -> 存全部"，如果为了批量操作并发调用 N 次单条接口，
+ * 多个请求各自读到同一份旧快照、各自存回去，后写的会把先写的改动覆盖掉——批量操作
+ * 必须一次读、一次改完全部、一次存，避免这个竞态。
+ */
+app.post('/api/tracking/containers/batch-delete', async (req, res) => {
+  const targets = parseContainerNumbers(req.body);
+  if (!targets) {
+    res.status(400).json({ error: 'containerNumbers must be a non-empty array' });
+    return;
+  }
+  const targetSet = new Set(targets);
+  const records = await loadRecords();
+  const next = records.filter((r) => !targetSet.has(r.containerNumber.toUpperCase()));
+  await saveRecords(next);
+  res.json({ deleted: records.length - next.length });
+});
+
+/** 批量标记完成，同样的原因——一次读改存，不并发调单条接口。 */
+app.post('/api/tracking/containers/batch-complete', async (req, res) => {
+  const targets = parseContainerNumbers(req.body);
+  if (!targets) {
+    res.status(400).json({ error: 'containerNumbers must be a non-empty array' });
+    return;
+  }
+  const targetSet = new Set(targets);
+  const now = new Date().toISOString();
+  let completed = 0;
+  const records = await loadRecords();
+  const next = records.map((r) => {
+    if (!targetSet.has(r.containerNumber.toUpperCase()) || r.completedAt) return r;
+    completed += 1;
+    return { ...r, completedAt: now };
+  });
+  await saveRecords(next);
+  res.json({ completed });
+});
+
 /** 手动触发：拿当前登记的、未完成的、carrier=BNSF 的箱号（目前唯一支持的），真的去跑一次爬虫。已完成(dispatch)的箱号不再查询。 */
 app.post('/api/tracking/trigger', async (_req, res) => {
   try {
