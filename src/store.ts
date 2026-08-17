@@ -65,7 +65,7 @@ export const KNOWN_COLUMNS: ColumnDef[] = [
   { key: 'lastFreeDay', label: 'LFD', visible: true, order: 5 },
   { key: 'destinationHub', label: 'Destination', visible: true, order: 6 },
   { key: 'lastHub', label: 'Current Location', visible: false, order: 7 },
-  { key: 'lotRowSpot', label: 'Yard Location', visible: false, order: 8 },
+  { key: 'lotRowSpot', label: 'Yard Location', visible: true, order: 8 },
   { key: 'chassisNumber', label: 'Chassis #', visible: false, order: 9 },
   { key: 'unitLength', label: 'Unit Length', visible: false, order: 10 },
   // BNSF 页面原始展示是 "Bill Y/N"；查过 BNSF 自己 API 文档里对应的是 fullBilledIndicator（是否已完成计费/放行前置条件），

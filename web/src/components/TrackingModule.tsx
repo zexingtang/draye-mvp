@@ -196,13 +196,21 @@ export function TrackingModule({
 
   const sorted = sortBy
     ? [...filtered].sort((a, b) => {
+        // 空值永远排最后，不管升序降序——不然点"按 ETA 排序"结果一堆没有 ETA 的空箱号
+        // 排在最前面，最该关注的"快到期的箱子"反而要往下翻才看得到。
         if (sortBy === 'lastUpdated') {
-          const at = a.lastUpdated ? new Date(a.lastUpdated).getTime() : 0;
-          const bt = b.lastUpdated ? new Date(b.lastUpdated).getTime() : 0;
+          if (!a.lastUpdated && !b.lastUpdated) return 0;
+          if (!a.lastUpdated) return 1;
+          if (!b.lastUpdated) return -1;
+          const at = new Date(a.lastUpdated).getTime();
+          const bt = new Date(b.lastUpdated).getTime();
           return sortDir === 'asc' ? at - bt : bt - at;
         }
         const av = getFieldValue(a, sortBy);
         const bv = getFieldValue(b, sortBy);
+        if (!av && !bv) return 0;
+        if (!av) return 1;
+        if (!bv) return -1;
         const cmp = av.localeCompare(bv);
         return sortDir === 'asc' ? cmp : -cmp;
       })

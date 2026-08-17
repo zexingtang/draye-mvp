@@ -240,14 +240,18 @@ app.post('/api/tracking/trigger', async (_req, res) => {
     const updated = records.map((r) => {
       const result = byContainer.get(r.containerNumber.toUpperCase());
       if (!result) return r;
+      const extra = (result.extra ?? {}) as Record<string, string | null>;
+      // Lot-Row-Spot 有值 = 箱子已经卸到场内具体的堆放位置了，这是"已落地"最直接的信号，
+      // 比"有没有 ETA"更能说明实际状态——优先级放在 ACTIVE 前面。
       const status: TrackingRecord['status'] = result.error
         ? result.error === 'Container not found in results'
           ? 'UNKNOWN'
           : 'ERROR'
-        : result.eta_date
-          ? 'ACTIVE'
-          : 'UNKNOWN';
-      const extra = (result.extra ?? {}) as Record<string, string | null>;
+        : extra.lot_row_spot
+          ? 'GROUNDED'
+          : result.eta_date
+            ? 'ACTIVE'
+            : 'UNKNOWN';
       return {
         ...r,
         status,
