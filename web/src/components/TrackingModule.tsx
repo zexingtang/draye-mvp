@@ -443,9 +443,11 @@ export function TrackingModule({
         </div>
       </div>
 
-      <div className="flex-1 overflow-auto bg-slate-50 p-8">
+      {/* 这一整块自己不滚动——真正滚动的是下面表格自己那个容器，让横向滚动条永远贴在
+          "看得见的表格区域"底部，不用先把两百多行滚到底才摸得到（之前的 bug）。 */}
+      <div className="flex-1 min-h-0 overflow-hidden bg-slate-50 p-8 flex flex-col">
         {viewMode === 'active' && selectedIds.size > 0 && (
-          <div className="mb-4 flex items-center gap-3 px-4 py-2.5 bg-slate-800 text-white rounded-lg">
+          <div className="mb-4 flex-shrink-0 flex items-center gap-3 px-4 py-2.5 bg-slate-800 text-white rounded-lg">
             <span className="text-sm font-medium">{selectedIds.size} selected</span>
             <div className="flex-1" />
             <button
@@ -478,12 +480,13 @@ export function TrackingModule({
             </button>
           </div>
         )}
-        <div className="bg-white rounded-lg border border-slate-200 overflow-hidden">
-          {/* 列开多了表格会比容器宽——这层专门负责横向滚动，外层的 overflow-hidden 只用来裁出圆角，
-              不然之前是外层直接裁掉了多出来的列，多开几列右边的字段就直接看不见、也滚不到。 */}
-          <div className="overflow-x-auto">
+        <div className="flex-1 min-h-0 bg-white rounded-lg border border-slate-200 overflow-hidden flex flex-col">
+          {/* 这层同时管横向和纵向滚动，高度被外层 flex-1 卡住不超过可视区域——两个滚动条
+              都贴在这个可视区域的边上，不会因为行数多就要先滚到最底下才看得到横向滚动条。
+              表头加 sticky，往下滚的时候列名还在，不用来回滚回顶部确认自己在看哪一列。 */}
+          <div className="flex-1 min-h-0 overflow-auto">
           <table className="w-full">
-            <thead className="bg-slate-50 border-b border-slate-200">
+            <thead className="bg-slate-50 border-b border-slate-200 sticky top-0 z-10">
               <tr>
                 {viewMode === 'active' && (
                   <th className="px-4 py-3 w-10">
