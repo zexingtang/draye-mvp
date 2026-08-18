@@ -35,6 +35,14 @@ function normalizeEmpty(value: string | null): string | null {
   return stripped ? value : null;
 }
 
+/**
+ * 整批都因为"非查无此箱"的原因失败了——说明是这一批的提交/跳转本身挂了，不是箱号的问题。
+ * "查无此箱"不算失败：那是正常业务情况(箱子可能已经不在 BNSF 系统里了)。
+ */
+function batchFailedEntirely(results: ContainerResult[]): boolean {
+  return results.length > 0 && results.every((r) => r.error && r.error !== 'Container not found in results');
+}
+
 /** 11 位标准集装箱号（4字母+7数字，含校验位）-> BNSF 查询用的 10 位设备号（去掉最后一位校验位） */
 function stripCheckDigit(containerNumber: string): string {
   const clean = containerNumber.trim().toUpperCase().replace(/\s+/g, '');
@@ -78,7 +86,19 @@ export class BNSFCrawler implements CarrierCrawler {
       for (let i = 0; i < batches.length; i++) {
         if (i > 0) await randomDelay(1000, 2000);
         console.log(`[BNSF] Batch ${i + 1}/${batches.length}: querying ${batches[i].length} container(s)`);
-        const batchResults = await this.queryBatch(page, batches[i]);
+        let batchResults = await this.queryBatch(page, batches[i]);
+
+        // 整批一个都没查到 = 这一批的提交/跳转本身出问题了(实际发生过：提交之后页面 30 秒
+        // 没响应，waitForNavigation 超时)，基本都是临时性的。重试一次，别让一次抖动就把
+        // 一整批(最多 50 个)箱号的数据全丢掉。只重试整批失败的情况——个别箱号查不到是
+        // 正常业务情况，重试没有意义。
+        if (batchFailedEntirely(batchResults)) {
+          console.log(`[BNSF] Batch ${i + 1} failed entirely, retrying once`);
+          await randomDelay(3000, 5000);
+          const retried = await this.queryBatch(page, batches[i]);
+          if (!batchFailedEntirely(retried)) batchResults = retried;
+        }
+
         allResults.push(...batchResults);
       }
 

@@ -285,6 +285,14 @@ app.post('/api/tracking/trigger', async (_req, res) => {
     const updated = records.map((r) => {
       const result = byContainer.get(r.containerNumber.toUpperCase());
       if (!result) return r;
+
+      // 抓取真的失败时(超时、页面结构变了这类，不是"查无此箱")原样保留上一次的数据，
+      // 不要用 null 覆盖掉。一次网络抖动不该把客户已经拿到的真实字段清空——2026-08-18
+      // 就真的发生过：4 个批次里有 1 个提交后 30 秒没响应，那 50 个箱号的 Last Hub/
+      // Destination/Billing 全被清成空、状态变 ERROR，而这些数据上一轮明明是好的。
+      // lastUpdated 也故意不更新：表格上那一列停在旧时间，本身就是"这条没刷新成功"的诚实信号。
+      if (result.error && result.error !== 'Container not found in results') return r;
+
       const extra = (result.extra ?? {}) as Record<string, string | null>;
       // Lot-Row-Spot 有值 = 箱子已经卸到场内具体的堆放位置了，这是"已落地"最直接的信号，
       // 比"有没有 ETA"更能说明实际状态——优先级放在 ACTIVE 前面。
