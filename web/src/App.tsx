@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { LayoutDashboard, LogOut, Ship, Truck, FileText, Lock } from 'lucide-react';
+import { LayoutDashboard, LogOut, Ship, Truck, FileText, Users, Lock } from 'lucide-react';
 import { DashboardModule } from './components/DashboardModule';
 import { TrackingModule } from './components/TrackingModule';
 import { LoginPage } from './components/LoginPage';
@@ -115,6 +115,7 @@ export default function App() {
         {navItem('tracking', 'Tracking', Ship)}
         {lockedNavItem('Dispatch', Truck)}
         {lockedNavItem('Invoices', FileText)}
+        {lockedNavItem('Resources', Users)}
 
         <div className="mt-auto pt-2 border-t border-slate-200">
           <button

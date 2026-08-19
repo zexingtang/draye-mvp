@@ -52,6 +52,11 @@ type ViewMode = 'active' | 'history';
 
 const SCHEDULE_OPTIONS = [1, 2, 4, 8];
 
+// 虚拟化参数：只渲染视口内的行，上下各多渲染 OVERSCAN 行做缓冲。ROW_HEIGHT 是实测的固定行距
+// （53px，含 divide-y 的 1px 边框）——所有行等高，所以固定值就够，用它算 spacer 高度和可见区间。
+const ROW_HEIGHT = 53;
+const OVERSCAN = 12;
+
 /** 两条记录按某一列比大小。空值永远排最后——不管升降序，没数据的行沉底、有意义的数据浮顶。 */
 function compareByEntry(a: TrackingRecord, b: TrackingRecord, key: string, dir: 'asc' | 'desc'): number {
   if (key === 'lastUpdated') {
@@ -161,13 +166,8 @@ const TrackingRow = memo(function TrackingRow({
   onReopen,
 }: TrackingRowProps) {
   return (
-    // content-visibility: auto —— 浏览器跳过滚动出视口的行的布局/绘制，几百行的表格滚动明显更跟手；
-    // contain-intrinsic-size 给个行高估值（约 45px）好让滚动条尺寸稳定，实测列宽不会跳。
-    // 去掉了 transition-colors：几百行都挂过渡动画，滚动/重绘时是白白的开销。
-    <tr
-      className={`hover:bg-slate-50 ${isSelected ? 'bg-slate-50' : ''}`}
-      style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 45px' }}
-    >
+    // 去掉了 transition-colors：几百行都挂过渡动画，滚动/重绘时是白白的开销（虚拟化后行数虽少，但没必要）。
+    <tr className={`hover:bg-slate-50 ${isSelected ? 'bg-slate-50' : ''}`}>
       {viewMode === 'active' && (
         <td className="px-4 py-3">
           <input
@@ -270,6 +270,10 @@ export function TrackingModule({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [batchActing, setBatchActing] = useState(false);
   const [confirmBatchDelete, setConfirmBatchDelete] = useState(false);
+  // 虚拟化滚动状态：scrollTop 决定渲染哪一段行，viewportH 决定一屏能放几行。
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportH, setViewportH] = useState(0);
   const confirmResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const batchConfirmResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 下面几个 ref 是为了让传给 memo 化行组件的事件回调保持"引用稳定"——
@@ -460,6 +464,24 @@ export function TrackingModule({
     shiftHeldRef.current = v;
   }, []);
 
+  // 测量滚动容器的可视高度（挂载 + 尺寸变化时），用来算一屏渲染几行。
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const measure = () => setViewportH(el.clientHeight);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // 滚动时更新 scrollTop 决定渲染哪一段。虚拟化后只渲染约一屏（几十行），重渲染很便宜，
+  // 直接 setState 即可，不用 rAF 节流——之前那套 rAF guard 有个坑：万一某次 rAF 没触发
+  // （标签页切后台等），ref 会永远卡住、之后再也不更新窗口。直接 setState 简单又稳。
+  const onScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    setScrollTop(e.currentTarget.scrollTop);
+  }, []);
+
   // "全选"操作的是当前搜索筛选之后看得见的这些行，不是全部 active 箱号——跟大多数表格的全选习惯一致。
   const allVisibleSelected = sorted.length > 0 && sorted.every((r) => selectedIds.has(r.id));
   const toggleSelectAll = () => {
@@ -476,6 +498,17 @@ export function TrackingModule({
   };
 
   const extraColumnCount = (viewMode === 'active' ? 2 : 1) + (viewMode === 'history' ? 1 : 0);
+  const totalColumnCount = visibleColumns.length + extraColumnCount;
+
+  // 虚拟化窗口：只渲染当前视口附近的行，上下用等高的 spacer 行撑起总高度、保持滚动条正确。
+  // viewportH 还没测到（首帧/隐藏）时用 600 兜底，先渲染一屏，测到真实高度后自动修正。
+  const totalRows = sorted.length;
+  const effectiveViewportH = viewportH || 600;
+  const startIndex = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN);
+  const endIndex = Math.min(totalRows, startIndex + Math.ceil(effectiveViewportH / ROW_HEIGHT) + OVERSCAN * 2);
+  const visibleRecords = sorted.slice(startIndex, endIndex);
+  const topPad = startIndex * ROW_HEIGHT;
+  const bottomPad = Math.max(0, (totalRows - endIndex) * ROW_HEIGHT);
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -729,8 +762,9 @@ export function TrackingModule({
         <div className="flex-1 min-h-0 bg-white rounded-lg border border-slate-200 overflow-hidden flex flex-col">
           {/* 这层同时管横向和纵向滚动，高度被外层 flex-1 卡住不超过可视区域——两个滚动条
               都贴在这个可视区域的边上，不会因为行数多就要先滚到最底下才看得到横向滚动条。
-              表头加 sticky，往下滚的时候列名还在，不用来回滚回顶部确认自己在看哪一列。 */}
-          <div className="flex-1 min-h-0 overflow-auto">
+              表头加 sticky，往下滚的时候列名还在，不用来回滚回顶部确认自己在看哪一列。
+              这一层也是虚拟化的滚动容器：ref + onScroll 驱动"只渲染视口内的行"。 */}
+          <div ref={scrollRef} onScroll={onScroll} className="flex-1 min-h-0 overflow-auto">
           <table className="w-full">
             <thead className="bg-slate-50 border-b border-slate-200 sticky top-0 z-10">
               <tr>
@@ -793,24 +827,38 @@ export function TrackingModule({
                   </td>
                 </tr>
               ) : (
-                sorted.map((record) => (
-                  <TrackingRow
-                    key={record.id}
-                    record={record}
-                    visibleColumns={visibleColumns}
-                    viewMode={viewMode}
-                    isSelected={selectedIds.has(record.id)}
-                    completing={completingId === record.id}
-                    deleting={deletingId === record.id}
-                    confirmingDelete={confirmDeleteId === record.id}
-                    reopening={reopeningId === record.id}
-                    onSetShiftHeld={setShiftHeld}
-                    onCheckboxToggle={handleCheckboxToggle}
-                    onComplete={handleCompleteClick}
-                    onDelete={handleDeleteClick}
-                    onReopen={handleReopenClick}
-                  />
-                ))
+                <>
+                  {/* 上方 spacer：把还没渲染的前面那些行的高度占住，滚动条位置才对。 */}
+                  {topPad > 0 && (
+                    <tr aria-hidden style={{ height: topPad }}>
+                      <td colSpan={totalColumnCount} className="p-0 border-0" />
+                    </tr>
+                  )}
+                  {visibleRecords.map((record) => (
+                    <TrackingRow
+                      key={record.id}
+                      record={record}
+                      visibleColumns={visibleColumns}
+                      viewMode={viewMode}
+                      isSelected={selectedIds.has(record.id)}
+                      completing={completingId === record.id}
+                      deleting={deletingId === record.id}
+                      confirmingDelete={confirmDeleteId === record.id}
+                      reopening={reopeningId === record.id}
+                      onSetShiftHeld={setShiftHeld}
+                      onCheckboxToggle={handleCheckboxToggle}
+                      onComplete={handleCompleteClick}
+                      onDelete={handleDeleteClick}
+                      onReopen={handleReopenClick}
+                    />
+                  ))}
+                  {/* 下方 spacer：占住后面还没渲染的行的高度。 */}
+                  {bottomPad > 0 && (
+                    <tr aria-hidden style={{ height: bottomPad }}>
+                      <td colSpan={totalColumnCount} className="p-0 border-0" />
+                    </tr>
+                  )}
+                </>
               )}
             </tbody>
           </table>
