@@ -235,7 +235,16 @@ Onboarding 表格（v1/v2，见下面）里 Custom Columns 那个 Step 3，客�
   现有客户（Newgen）无这些列 → 无限+全解锁，已线上验证不受影响。
 
 ### 待办 / 下一步（来自这批的延伸）
-- [ ] **表格虚拟化** —— 列表在 248 行且增长，排序/滚动的根治办法。memo + content-visibility 已缓解，但没根治。
+- [x] **表格虚拟化（已做，2026-08-19）** —— 手写窗口化，只渲染视口内约一屏（248 行时只渲染 ~36），
+  DOM 单元格从约 4000 降到约 577。取代了之前的 content-visibility（那只缓解绘制没减 DOM）。
+  滚动容器 ref+onScroll 按 scrollTop 算区间，上下用等高 spacer（ROW_HEIGHT=53）撑滚动条。
+  已验证：排序正确、滚动窗口跟随、shift 区间选择正常、全选仍选中全部 248。见 `TrackingModule.tsx`。
+- [x] **锁住的 Resources 入口** —— 侧栏第三个锁住入口（配合 Q6 可复用实体页规划）。
+- [x] **受限套餐 demo 账号（云端，2026-08-19）** —— 独立部署 `draye-demo`
+  （`https://draye-demo-373319016662.us-central1.run.app`，独立 Sheet + demo-track-all 每 8h），
+  账号 user01/hermes01，套餐 5次/天 + 仅解锁 8h。用来真实体验受限用户界面。已端到端验证。
+- [x] **修 onboard-customer.ps1** —— PS 5.1 下 EAP=Stop 会把原生命令 stderr 进度误当终止错误、脚本一开跑就挂
+  （这 bug 让脚本其实从没跑通过）。改 EAP=Continue + `$LASTEXITCODE` 检查 + provision 输出 `2>$null` 取尾行。
 - [ ] **OUTGATED 真实验证** —— GROUNDED 箱子彻底查不到 → 自动 OUTGATED 归档，这条只能等生产上真实发生时观察确认
   （本地无法制造"箱子从 BNSF 消失"）。护栏已验证：整批全查无此箱不会误触发归档。
 - [ ] **业务信息架构（用户问题 5/6，待定方向）** —— ①集装箱运营字段（size/weight/PU-BK 等）显示在哪个页面、
