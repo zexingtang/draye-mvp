@@ -14,6 +14,17 @@ export interface AddContainersResult {
   duplicates: string[];
 }
 
+/** Track All 进行中的实时进度，来自后端 /trigger?stream=1 的 NDJSON 流。null = 没在跑。 */
+export interface TrackProgress {
+  batchesDone: number;
+  totalBatches: number;
+  processed: number;
+  total: number;
+  found: number;
+  notFound: number;
+  errored: number;
+}
+
 export interface UseTrackingRecordsReturn {
   records: TrackingRecord[];
   loading: boolean;
@@ -21,6 +32,7 @@ export interface UseTrackingRecordsReturn {
   refetch: () => Promise<void>;
   triggerTrackAll: () => Promise<void>;
   tracking: boolean;
+  trackProgress: TrackProgress | null;
   addContainers: (containerNumbers: string[], carrier: string) => Promise<AddContainersResult>;
   adding: boolean;
   // 行级操作一律传记录 id（不是箱号）——OUTGATED 归档后同号可能有两条记录，按箱号会误伤。
@@ -36,6 +48,7 @@ export function useTrackingRecords(): UseTrackingRecordsReturn {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tracking, setTracking] = useState(false);
+  const [trackProgress, setTrackProgress] = useState<TrackProgress | null>(null);
   const [adding, setAdding] = useState(false);
 
   const refetch = useCallback(async () => {
@@ -55,17 +68,54 @@ export function useTrackingRecords(): UseTrackingRecordsReturn {
   const triggerTrackAll = useCallback(async () => {
     setTracking(true);
     setError(null);
+    setTrackProgress(null);
     try {
-      const res = await fetch('/api/tracking/trigger', { method: 'POST' });
-      if (!res.ok) {
+      // 流式版：每抓完一批后端推一行 NDJSON 进度，边读边更新进度条。
+      const res = await fetch('/api/tracking/trigger?stream=1', { method: 'POST' });
+      if (!res.ok || !res.body) {
         const body = await res.json().catch(() => ({}) as { error?: string });
         throw new Error(body.error || `POST /api/tracking/trigger failed: ${res.status}`);
       }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      let streamError: string | null = null;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split('\n');
+        buf = lines.pop() ?? ''; // 最后一段可能是半行，留到下次拼接
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          let msg: { type?: string; message?: string } & Partial<TrackProgress>;
+          try {
+            msg = JSON.parse(line);
+          } catch {
+            continue;
+          }
+          if (msg.type === 'progress') {
+            setTrackProgress({
+              batchesDone: msg.batchesDone ?? 0,
+              totalBatches: msg.totalBatches ?? 0,
+              processed: msg.processed ?? 0,
+              total: msg.total ?? 0,
+              found: msg.found ?? 0,
+              notFound: msg.notFound ?? 0,
+              errored: msg.errored ?? 0,
+            });
+          } else if (msg.type === 'error') {
+            streamError = msg.message ?? 'Track All failed';
+          }
+        }
+      }
+      if (streamError) throw new Error(streamError);
       await refetch();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Track All failed');
     } finally {
       setTracking(false);
+      setTrackProgress(null);
     }
   }, [refetch]);
 
@@ -207,6 +257,7 @@ export function useTrackingRecords(): UseTrackingRecordsReturn {
     refetch,
     triggerTrackAll,
     tracking,
+    trackProgress,
     addContainers,
     adding,
     deleteRecord,

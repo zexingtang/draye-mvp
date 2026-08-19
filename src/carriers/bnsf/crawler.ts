@@ -14,7 +14,7 @@
  */
 
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
-import type { CarrierCrawler, ContainerResult } from '../base.js';
+import type { CarrierCrawler, ContainerResult, CrawlProgressCallback } from '../base.js';
 import { CrawlerError } from '../base.js';
 import { getCrawlerOptions, getBatchSize } from './config.js';
 import { randomDelay } from '../../lib/delays.js';
@@ -35,12 +35,29 @@ function normalizeEmpty(value: string | null): string | null {
   return stripped ? value : null;
 }
 
+const NOT_FOUND_ERROR = 'Container not found in results';
+/** 整批返回空（每个箱号都"查无此箱"）时贴的错误——当作查询失败处理，不是真的每个箱子都查无。 */
+const BATCH_EMPTY_ERROR = 'Batch returned no results (possible query-size limit or page issue)';
+
 /**
  * 整批都因为"非查无此箱"的原因失败了——说明是这一批的提交/跳转本身挂了，不是箱号的问题。
  * "查无此箱"不算失败：那是正常业务情况(箱子可能已经不在 BNSF 系统里了)。
  */
 function batchFailedEntirely(results: ContainerResult[]): boolean {
-  return results.length > 0 && results.every((r) => r.error && r.error !== 'Container not found in results');
+  return results.length > 0 && results.every((r) => r.error && r.error !== NOT_FOUND_ERROR);
+}
+
+/**
+ * 整批每一个箱号都是"查无此箱"——高度可疑。实测 BNSF 的 DLL 页面一次最多查 100 个，
+ * 超过就静默返回空（所有箱号都变"查无此箱"，不报错）。正常一批几十个箱号不可能全查无，
+ * 所以整批全"查无此箱"基本就是"这次查询没真正返回"。把它们重贴成真实错误，好处：
+ * ① 触发整批重试；② 走数据保留逻辑，不用空值覆盖客户已有数据；③ 计入失败率报警；
+ * ④ 关键：不会被 server 端误当成真的"查无此箱"而把 GROUNDED 箱子错误归档成 OUTGATED。
+ */
+function relabelIfWholeBatchNotFound(results: ContainerResult[]): ContainerResult[] {
+  const allNotFound = results.length > 0 && results.every((r) => r.error === NOT_FOUND_ERROR);
+  if (!allNotFound) return results;
+  return results.map((r) => ({ ...r, error: BATCH_EMPTY_ERROR }));
 }
 
 /**
@@ -68,7 +85,7 @@ export class BNSFCrawler implements CarrierCrawler {
     this.batchSize = getBatchSize();
   }
 
-  async crawl(containerList: string[]): Promise<ContainerResult[]> {
+  async crawl(containerList: string[], onProgress?: CrawlProgressCallback): Promise<ContainerResult[]> {
     if (containerList.length === 0) {
       throw new Error('Container list cannot be empty');
     }
@@ -92,20 +109,33 @@ export class BNSFCrawler implements CarrierCrawler {
       for (let i = 0; i < batches.length; i++) {
         if (i > 0) await randomDelay(1000, 2000);
         console.log(`[BNSF] Batch ${i + 1}/${batches.length}: querying ${batches[i].length} container(s)`);
-        let batchResults = await this.queryBatch(page, batches[i]);
+        let batchResults = relabelIfWholeBatchNotFound(await this.queryBatch(page, batches[i]));
 
         // 整批一个都没查到 = 这一批的提交/跳转本身出问题了(实际发生过：提交之后页面 30 秒
-        // 没响应，waitForNavigation 超时)，基本都是临时性的。重试一次，别让一次抖动就把
-        // 一整批(最多 50 个)箱号的数据全丢掉。只重试整批失败的情况——个别箱号查不到是
-        // 正常业务情况，重试没有意义。
+        // 没响应，waitForNavigation 超时；或者一次提交超过 100 个箱号被页面静默拒绝)，
+        // 基本都是临时性/可纠正的。重试一次，别让一次抖动就把一整批箱号的数据全丢掉。
+        // 只重试整批失败的情况——个别箱号查不到是正常业务情况，重试没有意义。
         if (batchFailedEntirely(batchResults)) {
           console.log(`[BNSF] Batch ${i + 1} failed entirely, retrying once`);
           await randomDelay(3000, 5000);
-          const retried = await this.queryBatch(page, batches[i]);
+          const retried = relabelIfWholeBatchNotFound(await this.queryBatch(page, batches[i]));
           if (!batchFailedEntirely(retried)) batchResults = retried;
         }
 
         allResults.push(...batchResults);
+
+        // 每抓完一批上报一次累计进度，给前端进度条用
+        if (onProgress) {
+          onProgress({
+            batchesDone: i + 1,
+            totalBatches: batches.length,
+            processed: allResults.length,
+            total: containerList.length,
+            found: allResults.filter((r) => !r.error).length,
+            notFound: allResults.filter((r) => r.error === NOT_FOUND_ERROR).length,
+            errored: allResults.filter((r) => r.error && r.error !== NOT_FOUND_ERROR).length,
+          });
+        }
       }
 
       return allResults;

@@ -17,6 +17,7 @@ export default function App() {
     records,
     loading,
     tracking,
+    trackProgress,
     error,
     refetch: refetchTracking,
     triggerTrackAll,
@@ -105,6 +106,7 @@ export default function App() {
             columns={columns}
             loading={loading}
             tracking={tracking}
+            trackProgress={trackProgress}
             error={error}
             onTriggerTrackAll={triggerTrackAll}
             onAddContainers={addContainers}

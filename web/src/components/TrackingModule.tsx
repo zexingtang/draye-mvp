@@ -18,7 +18,7 @@ import {
 } from 'lucide-react';
 import type { ColumnDef, TrackingRecord } from '../types/tracking';
 import { getFieldValue } from '../types/tracking';
-import type { AddContainersResult } from '../hooks/useTrackingRecords';
+import type { AddContainersResult, TrackProgress } from '../hooks/useTrackingRecords';
 import { AddContainersModal } from './AddContainersModal';
 import { ColumnSettingsModal } from './ColumnSettingsModal';
 
@@ -28,6 +28,7 @@ interface TrackingModuleProps {
   columns: ColumnDef[];
   loading: boolean;
   tracking: boolean;
+  trackProgress: TrackProgress | null;
   error: string | null;
   onTriggerTrackAll: () => Promise<void>;
   onAddContainers: (containerNumbers: string[], carrier: string) => Promise<AddContainersResult>;
@@ -107,6 +108,7 @@ export function TrackingModule({
   columns,
   loading,
   tracking,
+  trackProgress,
   error,
   onTriggerTrackAll,
   onAddContainers,
@@ -486,6 +488,40 @@ export function TrackingModule({
       {/* 这一整块自己不滚动——真正滚动的是下面表格自己那个容器，让横向滚动条永远贴在
           "看得见的表格区域"底部，不用先把两百多行滚到底才摸得到（之前的 bug）。 */}
       <div className="flex-1 min-h-0 overflow-hidden bg-slate-50 p-8 flex flex-col">
+        {viewMode === 'active' && tracking && (
+          <div className="mb-4 flex-shrink-0 px-4 py-3 bg-white border border-slate-200 rounded-lg">
+            <div className="flex items-center justify-between mb-2 gap-3">
+              <div className="flex items-center gap-2 text-sm font-medium text-slate-700 min-w-0">
+                <RefreshCw className="w-4 h-4 animate-spin text-sky-600 flex-shrink-0" />
+                <span className="truncate">
+                  {trackProgress
+                    ? `Tracking — batch ${trackProgress.batchesDone}/${trackProgress.totalBatches} · ${trackProgress.processed}/${trackProgress.total} containers`
+                    : 'Starting tracking…'}
+                </span>
+              </div>
+              {trackProgress && (
+                <div className="flex items-center gap-3 text-xs flex-shrink-0">
+                  <span className="text-emerald-600 font-medium">{trackProgress.found} found</span>
+                  <span className="text-slate-400">{trackProgress.notFound} not found</span>
+                  {trackProgress.errored > 0 && (
+                    <span className="text-red-600 font-medium">{trackProgress.errored} error</span>
+                  )}
+                </div>
+              )}
+            </div>
+            <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-sky-500 transition-all duration-300"
+                style={{
+                  width:
+                    trackProgress && trackProgress.total > 0
+                      ? `${Math.round((trackProgress.processed / trackProgress.total) * 100)}%`
+                      : '8%',
+                }}
+              />
+            </div>
+          </div>
+        )}
         {viewMode === 'active' && selectedIds.size > 0 && (
           <div className="mb-4 flex-shrink-0 flex items-center gap-3 px-4 py-2.5 bg-slate-800 text-white rounded-lg">
             <span className="text-sm font-medium">{selectedIds.size} selected</span>

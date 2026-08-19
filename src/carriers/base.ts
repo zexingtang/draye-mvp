@@ -42,9 +42,29 @@ export interface DelayConfigs {
   afterQuery: DelayConfig;
 }
 
+/** 抓取进度回调的一次上报——每抓完一个批次调一次，用于前端进度条实时显示。累计值。 */
+export interface CrawlProgress {
+  /** 已完成的批次数 */
+  batchesDone: number;
+  /** 总批次数 */
+  totalBatches: number;
+  /** 已处理的箱号数（累计） */
+  processed: number;
+  /** 总箱号数 */
+  total: number;
+  /** 累计：抓到数据的 */
+  found: number;
+  /** 累计：查无此箱的 */
+  notFound: number;
+  /** 累计：真实错误的（超时/页面异常/整批空等） */
+  errored: number;
+}
+
+export type CrawlProgressCallback = (progress: CrawlProgress) => void;
+
 /** 每个 carrier 适配器都要实现这个接口 */
 export interface CarrierCrawler {
-  crawl(containerList: string[]): Promise<ContainerResult[]>;
+  crawl(containerList: string[], onProgress?: CrawlProgressCallback): Promise<ContainerResult[]>;
 }
 
 export class CrawlerError extends Error {

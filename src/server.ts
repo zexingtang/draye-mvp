@@ -277,20 +277,28 @@ app.post('/api/tracking/records/batch-complete', async (req, res) => {
   res.json({ completed });
 });
 
-/** 手动触发：拿当前登记的、未完成的、carrier=BNSF 的箱号（目前唯一支持的），真的去跑一次爬虫。已完成(dispatch)的箱号不再查询。 */
-app.post('/api/tracking/trigger', async (_req, res) => {
-  try {
-    const records = await loadRecords();
-    const bnsfRecords = records.filter((r) => r.carrier === 'BNSF' && !r.completedAt);
-    if (bnsfRecords.length === 0) {
-      res.json({ queried: 0 });
-      return;
-    }
+interface CrawlSummary {
+  queried: number;
+  found: number;
+  notFound: number;
+  errored: number;
+}
 
-    const crawler = new BNSFCrawler();
-    const results = await crawler.crawl(bnsfRecords.map((r) => r.containerNumber));
-    const now = new Date().toISOString();
-    const byContainer = new Map(results.map((r) => [r.cntr.toUpperCase(), r]));
+/**
+ * 跑一次爬虫并把结果写回 Sheet。可选 onProgress 回调用于流式进度上报。
+ * /trigger 的两条路径（定时任务 JSON 版 + UI 流式版）都调这一个函数，逻辑只有一份。
+ */
+async function runCrawlAndSave(onProgress?: import('./carriers/base.js').CrawlProgressCallback): Promise<CrawlSummary> {
+  const records = await loadRecords();
+  const bnsfRecords = records.filter((r) => r.carrier === 'BNSF' && !r.completedAt);
+  if (bnsfRecords.length === 0) {
+    return { queried: 0, found: 0, notFound: 0, errored: 0 };
+  }
+
+  const crawler = new BNSFCrawler();
+  const results = await crawler.crawl(bnsfRecords.map((r) => r.containerNumber), onProgress);
+  const now = new Date().toISOString();
+  const byContainer = new Map(results.map((r) => [r.cntr.toUpperCase(), r]));
 
     const updated = records.map((r) => {
       // 已完成/已归档的记录（completedAt 非空，含人工 dispatch 和 OUTGATED）永远不被抓取结果改动——
@@ -350,17 +358,54 @@ app.post('/api/tracking/trigger', async (_req, res) => {
     // BNSF 系统里了)，但如果一大批箱号都因为别的原因(超时、页面结构变了、站点连不上)查询失败，
     // 大概率是爬虫本身坏了，需要人去看。这行日志会被 Cloud Monitoring 的报警规则匹配到，发邮件通知。
     const realErrors = results.filter((r) => r.error && r.error !== 'Container not found in results').length;
-    if (results.length > 0 && realErrors / results.length > 0.2) {
-      console.error(
-        `[ALERT] BNSF crawl failure rate high: ${realErrors}/${results.length} containers errored for reasons other than "not found" — crawler may be broken`
-      );
-    }
+  if (results.length > 0 && realErrors / results.length > 0.2) {
+    console.error(
+      `[ALERT] BNSF crawl failure rate high: ${realErrors}/${results.length} containers errored for reasons other than "not found" — crawler may be broken`
+    );
+  }
 
-    await saveRecords(updated);
-    res.json({ queried: results.length });
+  await saveRecords(updated);
+  return {
+    queried: results.length,
+    found: results.filter((r) => !r.error).length,
+    notFound: results.filter((r) => r.error === 'Container not found in results').length,
+    errored: realErrors,
+  };
+}
+
+/**
+ * 手动/定时触发抓取。两种响应形态：
+ * - 默认（Cloud Scheduler 用）：跑完一次性返回 JSON，出错返回 500 让 scheduler 能感知失败重试。
+ * - ?stream=1（前端 UI 用）：流式返回 NDJSON，每抓完一批推一行进度，给进度条实时更新。
+ *   流式一旦开始就没法再改 HTTP 状态码了，出错也是 200——但 [ALERT] 日志照常打，
+ *   Cloud Monitoring 的日志报警不受影响。
+ */
+app.post('/api/tracking/trigger', async (req, res) => {
+  const stream = req.query.stream === '1';
+
+  if (!stream) {
+    try {
+      const summary = await runCrawlAndSave();
+      res.json(summary);
+    } catch (err) {
+      console.error('[ALERT] BNSF crawl trigger failed entirely:', err);
+      res.status(500).json({ error: err instanceof Error ? err.message : 'trigger failed' });
+    }
+    return;
+  }
+
+  res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.flushHeaders?.();
+  const write = (obj: unknown) => res.write(JSON.stringify(obj) + '\n');
+  try {
+    const summary = await runCrawlAndSave((p) => write({ type: 'progress', ...p }));
+    write({ type: 'done', ...summary });
   } catch (err) {
     console.error('[ALERT] BNSF crawl trigger failed entirely:', err);
-    res.status(500).json({ error: err instanceof Error ? err.message : 'trigger failed' });
+    write({ type: 'error', message: err instanceof Error ? err.message : 'trigger failed' });
+  } finally {
+    res.end();
   }
 });
 
