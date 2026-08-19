@@ -31,7 +31,11 @@ param(
   [string]$AllowedScheduleHours = ""
 )
 
-$ErrorActionPreference = "Stop"
+# 注意：这里**故意**用 Continue 而不是 Stop。PowerShell 5.1 在 ErrorActionPreference=Stop 下，
+# 会把原生命令（node/gcloud）写到 stderr 的**进度信息**也当成终止错误——而 provision-sheet 和
+# gcloud 都会往 stderr 打大量正常进度，用 Stop 会让脚本一开跑就挂。正确做法是每个关键原生命令之后
+# 自己检查 $LASTEXITCODE。
+$ErrorActionPreference = "Continue"
 
 $Region = "us-central1"
 $ServiceAccount = "draye-crawler@draye-mvp.iam.gserviceaccount.com"
@@ -48,9 +52,15 @@ $JobName = "$Slug-track-all"
 Write-Host "== 1/4 建 Google Sheet + 写入账号信息 + 分享给服务账号 ==" -ForegroundColor Cyan
 # 0 表示无限，转成空字符串传给 provision（空=无限）。
 $MaxArg = if ($MaxTrackAllPerDay -gt 0) { "$MaxTrackAllPerDay" } else { "" }
-$SheetId = (npx tsx src/dev/provision-sheet.ts "$CompanyName" "$Username" "$Password" "$MaxArg" "$AllowedScheduleHours" | Select-Object -Last 1).Trim()
+# provision-sheet 把进度打到 stderr、把 SheetId 打到 stdout。用 2>$null 丢掉进度只留 stdout，
+# 取最后一行就是 SheetId；再用 $LASTEXITCODE 判断成败（失败时 stdout 为空，SheetId 也会是空）。
+$provOut = & npx tsx src/dev/provision-sheet.ts "$CompanyName" "$Username" "$Password" "$MaxArg" "$AllowedScheduleHours" 2>$null
+if ($LASTEXITCODE -ne 0) {
+  throw "provision-sheet.ts 失败（exit $LASTEXITCODE）——单独跑一遍看 stderr 报什么错"
+}
+$SheetId = ($provOut | Select-Object -Last 1).ToString().Trim()
 if (-not $SheetId) {
-  throw "没拿到 Sheet ID，上面 provision-sheet.ts 的输出里看看是不是报错了"
+  throw "没拿到 Sheet ID，provision-sheet.ts 的输出不对"
 }
 Write-Host "Sheet ID: $SheetId"
 
@@ -67,6 +77,9 @@ gcloud run deploy $ServiceName `
   --timeout 300 `
   --set-env-vars "SHEET_ID=$SheetId,SCHEDULER_SECRET=$SchedulerSecret" `
   --quiet
+if ($LASTEXITCODE -ne 0) {
+  throw "gcloud run deploy 失败（exit $LASTEXITCODE）——上面的输出里看具体错误"
+}
 
 $ServiceUrl = gcloud run services describe $ServiceName --region $Region --format="value(status.url)"
 
