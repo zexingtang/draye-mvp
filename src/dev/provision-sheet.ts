@@ -3,7 +3,9 @@
  * 分享给部署服务用的服务账号。是 setup-sheet.ts 的参数化版本，onboard-customer.ps1 会调这个脚本，
  * 也可以单独手动跑。
  *
- * 用法：npx tsx src/dev/provision-sheet.ts "<公司名>" <用户名> <密码>
+ * 用法：npx tsx src/dev/provision-sheet.ts "<公司名>" <用户名> <密码> [每日TrackAll上限] [解锁档位]
+ *   例：... "Acme" admin pass123 5 8      → 每天最多 5 次手动 Track All、只解锁 8h 定时
+ *   例：... "Acme" admin pass123           → 无限次数、全档位解锁（不传就是不限制）
  *
  * 只往 stdout 打印最后建好的 spreadsheetId 这一行（其他信息走 stderr）——方便脚本用
  * 命令替换直接拿到 ID，不用额外解析。
@@ -33,12 +35,22 @@ const TRACKING_HEADERS = [
 ];
 
 const COLUMNS_HEADERS = ['key', 'label', 'visible', 'order'];
-const ACCOUNT_HEADERS = ['companyName', 'username', 'password'];
+// 后 4 列是套餐配置/用量：maxTrackAllPerDay（空=无限）、allowedScheduleHours（逗号分隔，空=全部）、
+// trackAllUsageDate/Count（运行时自动写，建表留空）。见 auth.ts。
+const ACCOUNT_HEADERS = [
+  'companyName',
+  'username',
+  'password',
+  'maxTrackAllPerDay',
+  'allowedScheduleHours',
+  'trackAllUsageDate',
+  'trackAllUsageCount',
+];
 
 async function main() {
-  const [companyName, username, password] = process.argv.slice(2);
+  const [companyName, username, password, maxTrackAll, allowedHours] = process.argv.slice(2);
   if (!companyName || !username || !password) {
-    console.error('用法: npx tsx src/dev/provision-sheet.ts "<公司名>" <用户名> <密码>');
+    console.error('用法: npx tsx src/dev/provision-sheet.ts "<公司名>" <用户名> <密码> [每日TrackAll上限] [解锁档位]');
     process.exit(1);
   }
 
@@ -71,7 +83,10 @@ async function main() {
         { range: 'Columns!A1', values: [COLUMNS_HEADERS] },
         { range: 'Columns!A2', values: KNOWN_COLUMNS.map((c) => [c.key, c.label, c.visible, c.order]) },
         { range: 'Account!A1', values: [ACCOUNT_HEADERS] },
-        { range: 'Account!A2', values: [[companyName, username, password]] },
+        {
+          range: 'Account!A2',
+          values: [[companyName, username, password, maxTrackAll ?? '', allowedHours ?? '', '', '']],
+        },
       ],
     },
   });

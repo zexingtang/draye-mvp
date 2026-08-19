@@ -7,6 +7,7 @@ import {
   Clock,
   Columns3,
   Loader2,
+  Lock,
   Plus,
   RefreshCw,
   Play,
@@ -19,6 +20,7 @@ import {
 import type { ColumnDef, TrackingRecord } from '../types/tracking';
 import { getFieldValue } from '../types/tracking';
 import type { AddContainersResult, TrackProgress } from '../hooks/useTrackingRecords';
+import type { Plan } from '../hooks/usePlan';
 import { AddContainersModal } from './AddContainersModal';
 import { ColumnSettingsModal } from './ColumnSettingsModal';
 
@@ -29,6 +31,7 @@ interface TrackingModuleProps {
   loading: boolean;
   tracking: boolean;
   trackProgress: TrackProgress | null;
+  plan: Plan | null;
   error: string | null;
   onTriggerTrackAll: () => Promise<void>;
   onAddContainers: (containerNumbers: string[], carrier: string) => Promise<AddContainersResult>;
@@ -238,6 +241,7 @@ export function TrackingModule({
   loading,
   tracking,
   trackProgress,
+  plan,
   error,
   onTriggerTrackAll,
   onAddContainers,
@@ -352,6 +356,12 @@ export function TrackingModule({
   );
 
   // handleCheckboxClick 需要读当前 sorted，定义在 sorted 之后
+
+  // 套餐派生标志：Track All 是否有额度限制/是否已用完；哪些 schedule 档位解锁了。
+  const trackAllRemaining = plan?.trackAllRemaining ?? null;
+  const trackAllLimit = plan?.maxTrackAllPerDay ?? null;
+  const trackAllExhausted = trackAllLimit !== null && trackAllRemaining !== null && trackAllRemaining <= 0;
+  const allowedScheduleHours = plan?.allowedScheduleHours ?? SCHEDULE_OPTIONS;
 
   /** Batch complete 跟单条一样不需要确认——容易撤销(History 里逐条 Reopen)。 */
   const handleBatchComplete = useCallback(async () => {
@@ -499,14 +509,26 @@ export function TrackingModule({
                   Columns
                 </button>
 
-                <button
-                  onClick={onTriggerTrackAll}
-                  disabled={tracking}
-                  className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50 transition-colors flex items-center gap-2 text-sm font-medium"
-                >
-                  {tracking ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-                  Track All
-                </button>
+                <div className="flex flex-col items-stretch">
+                  <button
+                    onClick={onTriggerTrackAll}
+                    disabled={tracking || trackAllExhausted}
+                    title={trackAllExhausted ? '今日 Track All 次数已用完，明天刷新' : undefined}
+                    className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2 text-sm font-medium"
+                  >
+                    {tracking ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                    Track All
+                  </button>
+                  {trackAllLimit !== null && (
+                    <span
+                      className={`mt-1 text-center text-xs ${trackAllExhausted ? 'text-red-500 font-medium' : 'text-slate-400'}`}
+                    >
+                      {trackAllExhausted
+                        ? `Limit reached (${trackAllLimit}/day)`
+                        : `${trackAllRemaining ?? trackAllLimit}/${trackAllLimit} left today`}
+                    </span>
+                  )}
+                </div>
 
                 <div className="relative">
                   <button
@@ -526,22 +548,38 @@ export function TrackingModule({
                       <div className="fixed inset-0 z-10" onClick={() => setShowScheduleMenu(false)} />
                       <div className="absolute right-0 top-10 z-20 w-52 bg-white rounded-lg shadow-lg border border-slate-200 py-1">
                         <div className="px-4 py-2 text-xs font-medium text-slate-400 uppercase tracking-wide">Auto-Track Interval</div>
-                        {SCHEDULE_OPTIONS.map((h) => (
-                          <button
-                            key={h}
-                            onClick={() => {
-                              onSetSchedule(h);
-                              setShowScheduleMenu(false);
-                            }}
-                            disabled={scheduleUpdating}
-                            className={`w-full px-4 py-2 text-left text-sm transition-colors flex items-center gap-2 disabled:opacity-50 ${
-                              scheduleEnabled && scheduleHours === h ? 'bg-amber-50 text-amber-700 font-medium' : 'text-slate-700 hover:bg-slate-50'
-                            }`}
-                          >
-                            <Play className="w-3.5 h-3.5" />
-                            Every {h} {h === 1 ? 'hour' : 'hours'}
-                          </button>
-                        ))}
+                        {SCHEDULE_OPTIONS.map((h) => {
+                          const locked = !allowedScheduleHours.includes(h);
+                          if (locked) {
+                            return (
+                              <div
+                                key={h}
+                                title="请升级 Plan 解锁该频率 · Upgrade to unlock"
+                                className="w-full px-4 py-2 text-left text-sm flex items-center gap-2 text-slate-300 cursor-not-allowed select-none"
+                              >
+                                <Lock className="w-3.5 h-3.5" />
+                                Every {h} {h === 1 ? 'hour' : 'hours'}
+                                <span className="ml-auto text-[10px] uppercase tracking-wide text-slate-300">Upgrade</span>
+                              </div>
+                            );
+                          }
+                          return (
+                            <button
+                              key={h}
+                              onClick={() => {
+                                onSetSchedule(h);
+                                setShowScheduleMenu(false);
+                              }}
+                              disabled={scheduleUpdating}
+                              className={`w-full px-4 py-2 text-left text-sm transition-colors flex items-center gap-2 disabled:opacity-50 ${
+                                scheduleEnabled && scheduleHours === h ? 'bg-amber-50 text-amber-700 font-medium' : 'text-slate-700 hover:bg-slate-50'
+                              }`}
+                            >
+                              <Play className="w-3.5 h-3.5" />
+                              Every {h} {h === 1 ? 'hour' : 'hours'}
+                            </button>
+                          );
+                        })}
                         {scheduleEnabled && (
                           <>
                             <div className="my-1 border-t border-slate-200" />

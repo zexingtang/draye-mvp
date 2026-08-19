@@ -26,7 +26,16 @@ const TRACKING_HEADERS = [
 ];
 
 const COLUMNS_HEADERS = ['key', 'label', 'visible', 'order'];
-const ACCOUNT_HEADERS = ['companyName', 'username', 'password'];
+// 后 4 列是套餐配置/用量，见 auth.ts；建表默认无限额度、全档位（留空）。
+const ACCOUNT_HEADERS = [
+  'companyName',
+  'username',
+  'password',
+  'maxTrackAllPerDay',
+  'allowedScheduleHours',
+  'trackAllUsageDate',
+  'trackAllUsageCount',
+];
 
 async function main() {
   const auth = new google.auth.GoogleAuth({
@@ -59,7 +68,7 @@ async function main() {
           values: KNOWN_COLUMNS.map((c) => [c.key, c.label, c.visible, c.order]),
         },
         { range: 'Account!A1', values: [ACCOUNT_HEADERS] },
-        { range: 'Account!A2', values: [['Draye', 'admin', 'changeme']] },
+        { range: 'Account!A2', values: [['Draye', 'admin', 'changeme', '', '', '', '']] },
       ],
     },
   });

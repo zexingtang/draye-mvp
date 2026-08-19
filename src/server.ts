@@ -17,7 +17,16 @@ import {
   type ColumnDef,
 } from './store.js';
 import { BNSFCrawler } from './carriers/bnsf/index.js';
-import { loadAccount, createSession, isValidSession, destroySession, parseCookies, SESSION_COOKIE } from './auth.js';
+import {
+  loadAccount,
+  createSession,
+  isValidSession,
+  destroySession,
+  parseCookies,
+  SESSION_COOKIE,
+  consumeTrackAll,
+  usedTrackAllToday,
+} from './auth.js';
 import { getSchedule, setScheduleHours, pauseSchedule, SCHEDULE_HOUR_OPTIONS } from './scheduler.js';
 
 const app = express();
@@ -83,6 +92,28 @@ app.get('/api/auth/session', async (req, res) => {
 app.use('/api/tracking', requireAuth);
 app.use('/api/columns', requireAuth);
 app.use('/api/schedule', requireAuth);
+app.use('/api/plan', requireAuth);
+
+// ---------------------------------------------------------------------------
+// Plan —— 账号套餐（每日 Track All 额度 + 解锁的 schedule 档位）。前端据此显示用量、
+// 锁住未解锁的档位。额度/档位存在 Account tab（每客户一套），环境变量可覆盖用于测试。
+// ---------------------------------------------------------------------------
+
+app.get('/api/plan', async (_req, res) => {
+  try {
+    const account = await loadAccount();
+    const usedToday = usedTrackAllToday(account);
+    const limit = account.plan.maxTrackAllPerDay;
+    res.json({
+      maxTrackAllPerDay: limit,
+      allowedScheduleHours: account.plan.allowedScheduleHours,
+      trackAllUsedToday: usedToday,
+      trackAllRemaining: limit === null ? null : Math.max(0, limit - usedToday),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to read plan' });
+  }
+});
 
 // ---------------------------------------------------------------------------
 // Schedule —— 真正的服务器端定时任务(Cloud Scheduler)，不是浏览器 setInterval。
@@ -399,13 +430,25 @@ app.post('/api/tracking/trigger', async (req, res) => {
     return;
   }
 
+  // 手动 Track All 受每日额度限制（定时任务走上面的非 stream 分支，不受限）。
+  // 消费一次额度：超限就直接 429 拒绝，不开始抓取，也不开流。
+  const quota = await consumeTrackAll();
+  if (!quota.allowed) {
+    res.status(429).json({
+      error: `今天的 Track All 次数已用完（${quota.usedToday}/${quota.limit}），明天 UTC 0 点刷新。升级套餐可提高上限。`,
+      usedToday: quota.usedToday,
+      limit: quota.limit,
+    });
+    return;
+  }
+
   res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.flushHeaders?.();
   const write = (obj: unknown) => res.write(JSON.stringify(obj) + '\n');
   try {
     const summary = await runCrawlAndSave((p) => write({ type: 'progress', ...p }));
-    write({ type: 'done', ...summary });
+    write({ type: 'done', ...summary, trackAllUsedToday: quota.usedToday, trackAllLimit: quota.limit });
   } catch (err) {
     console.error('[ALERT] BNSF crawl trigger failed entirely:', err);
     write({ type: 'error', message: err instanceof Error ? err.message : 'trigger failed' });

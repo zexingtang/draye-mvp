@@ -24,7 +24,11 @@ param(
   [Parameter(Mandatory = $true)][string]$CompanyName,
   [Parameter(Mandatory = $true)][string]$Username,
   [Parameter(Mandatory = $true)][string]$Password,
-  [int]$ScheduleHours = 4
+  [int]$ScheduleHours = 4,
+  # 套餐：每日手动 Track All 上限（0 = 无限）；解锁的定时档位（逗号分隔，空 = 全部 1,2,4,8）。
+  # 例：-MaxTrackAllPerDay 5 -AllowedScheduleHours "8" 就是受限套餐。
+  [int]$MaxTrackAllPerDay = 0,
+  [string]$AllowedScheduleHours = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -42,7 +46,9 @@ $ServiceName = "draye-$Slug"
 $JobName = "$Slug-track-all"
 
 Write-Host "== 1/4 建 Google Sheet + 写入账号信息 + 分享给服务账号 ==" -ForegroundColor Cyan
-$SheetId = (npx tsx src/dev/provision-sheet.ts "$CompanyName" "$Username" "$Password" | Select-Object -Last 1).Trim()
+# 0 表示无限，转成空字符串传给 provision（空=无限）。
+$MaxArg = if ($MaxTrackAllPerDay -gt 0) { "$MaxTrackAllPerDay" } else { "" }
+$SheetId = (npx tsx src/dev/provision-sheet.ts "$CompanyName" "$Username" "$Password" "$MaxArg" "$AllowedScheduleHours" | Select-Object -Last 1).Trim()
 if (-not $SheetId) {
   throw "没拿到 Sheet ID，上面 provision-sheet.ts 的输出里看看是不是报错了"
 }
