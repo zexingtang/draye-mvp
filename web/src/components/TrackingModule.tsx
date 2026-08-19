@@ -31,11 +31,11 @@ interface TrackingModuleProps {
   error: string | null;
   onTriggerTrackAll: () => Promise<void>;
   onAddContainers: (containerNumbers: string[], carrier: string) => Promise<AddContainersResult>;
-  onDeleteContainer: (containerNumber: string) => Promise<void>;
-  onCompleteContainer: (containerNumber: string) => Promise<void>;
-  onReopenContainer: (containerNumber: string) => Promise<void>;
-  onBatchDeleteContainers: (containerNumbers: string[]) => Promise<number>;
-  onBatchCompleteContainers: (containerNumbers: string[]) => Promise<number>;
+  onDeleteRecord: (id: string) => Promise<void>;
+  onCompleteRecord: (id: string) => Promise<void>;
+  onReopenRecord: (id: string) => Promise<void>;
+  onBatchDeleteRecords: (ids: string[]) => Promise<number>;
+  onBatchCompleteRecords: (ids: string[]) => Promise<number>;
   onSaveColumns: (columns: ColumnDef[]) => Promise<void>;
   scheduleHours: number | null;
   scheduleEnabled: boolean;
@@ -77,6 +77,7 @@ export function renderTrackingCell(col: ColumnDef, record: TrackingRecord) {
       GROUNDED: 'bg-red-100 text-red-700',
       ERROR: 'bg-red-100 text-red-700',
       UNKNOWN: 'bg-gray-100 text-gray-700',
+      OUTGATED: 'bg-blue-100 text-blue-700',
     };
     return <span className={`px-2 py-1 rounded-md text-xs font-medium uppercase ${colors[value] || colors.UNKNOWN}`}>{value}</span>;
   }
@@ -109,11 +110,11 @@ export function TrackingModule({
   error,
   onTriggerTrackAll,
   onAddContainers,
-  onDeleteContainer,
-  onCompleteContainer,
-  onReopenContainer,
-  onBatchDeleteContainers,
-  onBatchCompleteContainers,
+  onDeleteRecord,
+  onCompleteRecord,
+  onReopenRecord,
+  onBatchDeleteRecords,
+  onBatchCompleteRecords,
   onSaveColumns,
   scheduleHours,
   scheduleEnabled,
@@ -176,12 +177,12 @@ export function TrackingModule({
       setConfirmDeleteId(null);
       setDeletingId(record.id);
       try {
-        await onDeleteContainer(record.containerNumber);
+        await onDeleteRecord(record.id);
       } finally {
         setDeletingId(null);
       }
     },
-    [confirmDeleteId, onDeleteContainer]
+    [confirmDeleteId, onDeleteRecord]
   );
 
   /** Complete 单击即完成，不需要二次确认——它很容易撤销(History 里 Reopen)，不像 Delete 那样是真的丢数据。 */
@@ -189,12 +190,12 @@ export function TrackingModule({
     async (record: TrackingRecord) => {
       setCompletingId(record.id);
       try {
-        await onCompleteContainer(record.containerNumber);
+        await onCompleteRecord(record.id);
       } finally {
         setCompletingId(null);
       }
     },
-    [onCompleteContainer]
+    [onCompleteRecord]
   );
 
   /** Reopen 跟 Complete 一样不需要确认——本来就是"撤销"操作，不会丢数据。 */
@@ -202,28 +203,28 @@ export function TrackingModule({
     async (record: TrackingRecord) => {
       setReopeningId(record.id);
       try {
-        await onReopenContainer(record.containerNumber);
+        await onReopenRecord(record.id);
       } finally {
         setReopeningId(null);
       }
     },
-    [onReopenContainer]
+    [onReopenRecord]
   );
 
   // handleCheckboxClick 需要读当前 sorted，定义在 sorted 之后
 
   /** Batch complete 跟单条一样不需要确认——容易撤销(History 里逐条 Reopen)。 */
   const handleBatchComplete = useCallback(async () => {
-    const containerNumbers = records.filter((r) => selectedIds.has(r.id)).map((r) => r.containerNumber);
-    if (containerNumbers.length === 0) return;
+    const ids = records.filter((r) => selectedIds.has(r.id)).map((r) => r.id);
+    if (ids.length === 0) return;
     setBatchActing(true);
     try {
-      await onBatchCompleteContainers(containerNumbers);
+      await onBatchCompleteRecords(ids);
       setSelectedIds(new Set());
     } finally {
       setBatchActing(false);
     }
-  }, [records, selectedIds, onBatchCompleteContainers]);
+  }, [records, selectedIds, onBatchCompleteRecords]);
 
   /** Batch delete 跟单条删除一样要二次确认（真的会丢数据），点一下进入确认态，3 秒内没再点自动取消。 */
   const handleBatchDeleteClick = useCallback(async () => {
@@ -235,16 +236,16 @@ export function TrackingModule({
     }
     if (batchConfirmResetRef.current) clearTimeout(batchConfirmResetRef.current);
     setConfirmBatchDelete(false);
-    const containerNumbers = records.filter((r) => selectedIds.has(r.id)).map((r) => r.containerNumber);
-    if (containerNumbers.length === 0) return;
+    const ids = records.filter((r) => selectedIds.has(r.id)).map((r) => r.id);
+    if (ids.length === 0) return;
     setBatchActing(true);
     try {
-      await onBatchDeleteContainers(containerNumbers);
+      await onBatchDeleteRecords(ids);
       setSelectedIds(new Set());
     } finally {
       setBatchActing(false);
     }
-  }, [confirmBatchDelete, records, selectedIds, onBatchDeleteContainers]);
+  }, [confirmBatchDelete, records, selectedIds, onBatchDeleteRecords]);
 
   const visibleColumns = [...columns].filter((c) => c.visible).sort((a, b) => a.order - b.order);
   const sourceRecords = viewMode === 'active' ? records : historyRecords;
@@ -288,9 +289,14 @@ export function TrackingModule({
         ? [...filtered].sort((a, b) => (b.completedAt ?? '').localeCompare(a.completedAt ?? ''))
         : filtered;
 
-  /** Shift+单击：选中从上次点击行到当前行的整个区间（按当前排序顺序）。普通点击：切换单行。 */
-  const handleCheckboxClick = (e: React.MouseEvent<HTMLInputElement>, id: string, idx: number) => {
-    if (e.shiftKey && lastSelectedIndexRef.current !== null) {
+  /**
+   * Shift+单击：选中从上次点击行到当前行的整个区间（按当前排序顺序）。普通点击：切换单行。
+   * shift 状态用 onClick 提前记进 ref，真正的切换走 checkbox 原生的 onChange——
+   * 不在 onClick 里 preventDefault（那样会破坏受控 checkbox 的对勾刷新，出现"选中了但没打勾"）。
+   */
+  const shiftHeldRef = useRef(false);
+  const handleCheckboxToggle = (id: string, idx: number) => {
+    if (shiftHeldRef.current && lastSelectedIndexRef.current !== null) {
       const from = Math.min(lastSelectedIndexRef.current, idx);
       const to = Math.max(lastSelectedIndexRef.current, idx);
       setSelectedIds((prev) => {
@@ -298,6 +304,7 @@ export function TrackingModule({
         sorted.slice(from, to + 1).forEach((r) => next.add(r.id));
         return next;
       });
+      lastSelectedIndexRef.current = idx;
     } else {
       setSelectedIds((prev) => {
         const next = new Set(prev);
@@ -587,8 +594,8 @@ export function TrackingModule({
                         <input
                           type="checkbox"
                           checked={selectedIds.has(record.id)}
-                          onChange={() => {}}
-                          onClick={(e) => { e.preventDefault(); handleCheckboxClick(e, record.id, idx); }}
+                          onClick={(e) => { shiftHeldRef.current = e.shiftKey; }}
+                          onChange={() => handleCheckboxToggle(record.id, idx)}
                           className="w-4 h-4 rounded border-slate-300 text-slate-800 focus:ring-slate-500 cursor-pointer"
                         />
                       </td>

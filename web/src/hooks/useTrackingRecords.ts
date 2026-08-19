@@ -23,11 +23,12 @@ export interface UseTrackingRecordsReturn {
   tracking: boolean;
   addContainers: (containerNumbers: string[], carrier: string) => Promise<AddContainersResult>;
   adding: boolean;
-  deleteContainer: (containerNumber: string) => Promise<void>;
-  completeContainer: (containerNumber: string) => Promise<void>;
-  reopenContainer: (containerNumber: string) => Promise<void>;
-  batchDeleteContainers: (containerNumbers: string[]) => Promise<number>;
-  batchCompleteContainers: (containerNumbers: string[]) => Promise<number>;
+  // 行级操作一律传记录 id（不是箱号）——OUTGATED 归档后同号可能有两条记录，按箱号会误伤。
+  deleteRecord: (id: string) => Promise<void>;
+  completeRecord: (id: string) => Promise<void>;
+  reopenRecord: (id: string) => Promise<void>;
+  batchDeleteRecords: (ids: string[]) => Promise<number>;
+  batchCompleteRecords: (ids: string[]) => Promise<number>;
 }
 
 export function useTrackingRecords(): UseTrackingRecordsReturn {
@@ -79,7 +80,6 @@ export function useTrackingRecords(): UseTrackingRecordsReturn {
     async (containerNumbers: string[], carrier: string): Promise<AddContainersResult> => {
       setAdding(true);
       try {
-        const byNumber = new Map(records.map((r) => [r.containerNumber.toUpperCase(), r]));
         const duplicates: string[] = [];
         const toSend: string[] = [];
         const seen = new Set<string>();
@@ -88,8 +88,12 @@ export function useTrackingRecords(): UseTrackingRecordsReturn {
           const cno = raw.trim().toUpperCase();
           if (!cno || seen.has(cno)) continue;
           seen.add(cno);
-          const existing = byNumber.get(cno);
-          if (existing && !existing.completedAt) {
+          // "已经在追踪中"（存在未完成的记录）才算真正的重复、跳过。只剩已完成/OUTGATED
+          // 历史记录的话不算重复——那要么是重新激活、要么是全新一票货，都交给后端处理。
+          const activeExisting = records.some(
+            (r) => r.containerNumber.toUpperCase() === cno && !r.completedAt
+          );
+          if (activeExisting) {
             duplicates.push(cno);
             continue;
           }
@@ -122,20 +126,20 @@ export function useTrackingRecords(): UseTrackingRecordsReturn {
     [records, refetch]
   );
 
-  const deleteContainer = useCallback(
-    async (containerNumber: string) => {
-      const res = await fetch(`/api/tracking/containers/${encodeURIComponent(containerNumber)}`, {
+  const deleteRecord = useCallback(
+    async (id: string) => {
+      const res = await fetch(`/api/tracking/records/${encodeURIComponent(id)}`, {
         method: 'DELETE',
       });
-      if (!res.ok) throw new Error(`DELETE /api/tracking/containers failed: ${res.status}`);
+      if (!res.ok) throw new Error(`DELETE /api/tracking/records failed: ${res.status}`);
       await refetch();
     },
     [refetch]
   );
 
-  const completeContainer = useCallback(
-    async (containerNumber: string) => {
-      const res = await fetch(`/api/tracking/containers/${encodeURIComponent(containerNumber)}/complete`, {
+  const completeRecord = useCallback(
+    async (id: string) => {
+      const res = await fetch(`/api/tracking/records/${encodeURIComponent(id)}/complete`, {
         method: 'POST',
       });
       if (!res.ok) throw new Error(`POST .../complete failed: ${res.status}`);
@@ -144,9 +148,9 @@ export function useTrackingRecords(): UseTrackingRecordsReturn {
     [refetch]
   );
 
-  const reopenContainer = useCallback(
-    async (containerNumber: string) => {
-      const res = await fetch(`/api/tracking/containers/${encodeURIComponent(containerNumber)}/reopen`, {
+  const reopenRecord = useCallback(
+    async (id: string) => {
+      const res = await fetch(`/api/tracking/records/${encodeURIComponent(id)}/reopen`, {
         method: 'POST',
       });
       if (!res.ok) throw new Error(`POST .../reopen failed: ${res.status}`);
@@ -156,12 +160,12 @@ export function useTrackingRecords(): UseTrackingRecordsReturn {
   );
 
   /** 批量操作——一次请求改完所有选中的箱号，不是循环调单条接口（避免并发读改存互相覆盖，见 server.ts 注释）。 */
-  const batchDeleteContainers = useCallback(
-    async (containerNumbers: string[]): Promise<number> => {
-      const res = await fetch('/api/tracking/containers/batch-delete', {
+  const batchDeleteRecords = useCallback(
+    async (ids: string[]): Promise<number> => {
+      const res = await fetch('/api/tracking/records/batch-delete', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ containerNumbers }),
+        body: JSON.stringify({ ids }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}) as { error?: string });
@@ -174,12 +178,12 @@ export function useTrackingRecords(): UseTrackingRecordsReturn {
     [refetch]
   );
 
-  const batchCompleteContainers = useCallback(
-    async (containerNumbers: string[]): Promise<number> => {
-      const res = await fetch('/api/tracking/containers/batch-complete', {
+  const batchCompleteRecords = useCallback(
+    async (ids: string[]): Promise<number> => {
+      const res = await fetch('/api/tracking/records/batch-complete', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ containerNumbers }),
+        body: JSON.stringify({ ids }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}) as { error?: string });
@@ -205,10 +209,10 @@ export function useTrackingRecords(): UseTrackingRecordsReturn {
     tracking,
     addContainers,
     adding,
-    deleteContainer,
-    completeContainer,
-    reopenContainer,
-    batchDeleteContainers,
-    batchCompleteContainers,
+    deleteRecord,
+    completeRecord,
+    reopenRecord,
+    batchDeleteRecords,
+    batchCompleteRecords,
   };
 }

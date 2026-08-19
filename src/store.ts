@@ -25,7 +25,9 @@ export interface TrackingRecord {
   id: string;
   containerNumber: string;
   carrier: string;
-  status: 'ACTIVE' | 'GROUNDED' | 'ERROR' | 'UNKNOWN';
+  // OUTGATED = 曾经 GROUNDED（已落地、有堆位）然后又查不到了 → 判定为已被提离场站，完成一个生命周期。
+  // 拿到这个状态的记录会自动 completedAt、挪进 History 存档，不再参与后续抓取。
+  status: 'ACTIVE' | 'GROUNDED' | 'ERROR' | 'UNKNOWN' | 'OUTGATED';
   etaDate: string | null;
   etaTime: string | null;
   lastFreeDay: string | null;

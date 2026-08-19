@@ -7,7 +7,7 @@ export interface TrackingRecord {
   id: string;
   containerNumber: string;
   carrier: string;
-  status: 'ACTIVE' | 'GROUNDED' | 'ERROR' | 'UNKNOWN';
+  status: 'ACTIVE' | 'GROUNDED' | 'ERROR' | 'UNKNOWN' | 'OUTGATED';
   etaDate: string | null;
   etaTime: string | null;
   lastFreeDay: string | null;

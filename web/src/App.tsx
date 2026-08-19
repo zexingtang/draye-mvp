@@ -21,11 +21,11 @@ export default function App() {
     refetch: refetchTracking,
     triggerTrackAll,
     addContainers,
-    deleteContainer,
-    completeContainer,
-    reopenContainer,
-    batchDeleteContainers,
-    batchCompleteContainers,
+    deleteRecord,
+    completeRecord,
+    reopenRecord,
+    batchDeleteRecords,
+    batchCompleteRecords,
   } = useTrackingRecords();
   const { columns, saveColumns, refetch: refetchColumns } = useColumns();
   const {
@@ -108,11 +108,11 @@ export default function App() {
             error={error}
             onTriggerTrackAll={triggerTrackAll}
             onAddContainers={addContainers}
-            onDeleteContainer={deleteContainer}
-            onCompleteContainer={completeContainer}
-            onReopenContainer={reopenContainer}
-            onBatchDeleteContainers={batchDeleteContainers}
-            onBatchCompleteContainers={batchCompleteContainers}
+            onDeleteRecord={deleteRecord}
+            onCompleteRecord={completeRecord}
+            onReopenRecord={reopenRecord}
+            onBatchDeleteRecords={batchDeleteRecords}
+            onBatchCompleteRecords={batchCompleteRecords}
             onSaveColumns={saveColumns}
             scheduleHours={scheduleHours}
             scheduleEnabled={scheduleEnabled}

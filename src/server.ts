@@ -141,7 +141,6 @@ app.post('/api/tracking/containers', async (req, res) => {
   }
 
   const records = await loadRecords();
-  const byNumber = new Map(records.map((r) => [r.containerNumber.toUpperCase(), r]));
   const next = [...records];
   const added: TrackingRecord[] = [];
   let reactivated = 0;
@@ -149,16 +148,26 @@ app.post('/api/tracking/containers', async (req, res) => {
   for (const raw of body.containerNumbers) {
     const cno = String(raw).trim().toUpperCase();
     if (!cno) continue;
-    const existing = byNumber.get(cno);
-    if (existing) {
-      // 已完成的箱号再次被添加 = 重新激活追踪，而不是当成"已存在"静默跳过。
-      if (existing.completedAt) {
-        const idx = next.findIndex((r) => r.id === existing.id);
-        next[idx] = { ...existing, completedAt: null };
-        reactivated += 1;
-      }
+
+    // 已经在追踪中（未完成）的箱号 → 已存在，跳过。
+    const active = next.find((r) => r.containerNumber.toUpperCase() === cno && !r.completedAt);
+    if (active) continue;
+
+    // 有"人工标记完成/dispatch"的历史记录（不是走完生命周期的 OUTGATED）→ 重新激活它，
+    // 这是老流程：客户手动 dispatch 后同一个箱子又回来了，直接从 History 挪回来。
+    const dispatched = next.find(
+      (r) => r.containerNumber.toUpperCase() === cno && r.completedAt && r.status !== 'OUTGATED'
+    );
+    if (dispatched) {
+      const idx = next.findIndex((r) => r.id === dispatched.id);
+      next[idx] = { ...dispatched, completedAt: null };
+      reactivated += 1;
       continue;
     }
+
+    // 剩下两种情况都建一条全新记录：① 全新箱号；② 只剩 OUTGATED 历史记录——
+    // OUTGATED 是上一段生命周期的存档，留在 History 不动，这次是全新的一票货，
+    // 不复用旧记录（客户明确要求：同号再 add 不 reopen OUTGATED 的那条）。
     const record: TrackingRecord = {
       id: `${cno}-${Date.now()}`,
       containerNumber: cno,
@@ -177,7 +186,6 @@ app.post('/api/tracking/containers', async (req, res) => {
       lastUpdated: null,
       completedAt: null,
     };
-    byNumber.set(cno, record);
     added.push(record);
     next.push(record);
   }
@@ -186,21 +194,23 @@ app.post('/api/tracking/containers', async (req, res) => {
   res.json({ added: added.length, reactivated });
 });
 
-app.delete('/api/tracking/containers/:containerNumber', async (req, res) => {
-  const target = req.params.containerNumber.toUpperCase();
+// 行级操作一律按记录 id（不是箱号）——因为 OUTGATED 归档后，同一个箱号可能同时存在
+// 两条记录（History 里的 OUTGATED 存档 + 重新 add 的新 active），按箱号操作会误伤另一条。
+app.delete('/api/tracking/records/:id', async (req, res) => {
+  const target = req.params.id;
   const records = await loadRecords();
-  const next = records.filter((r) => r.containerNumber.toUpperCase() !== target);
+  const next = records.filter((r) => r.id !== target);
   await saveRecords(next);
   res.json({ deleted: records.length !== next.length });
 });
 
 /** 标记完成/dispatch——不删除记录，只是从 Track All 和 Dashboard 统计里排除，挪去 History。可 Reopen 撤销。 */
-app.post('/api/tracking/containers/:containerNumber/complete', async (req, res) => {
-  const target = req.params.containerNumber.toUpperCase();
+app.post('/api/tracking/records/:id/complete', async (req, res) => {
+  const target = req.params.id;
   const records = await loadRecords();
-  const idx = records.findIndex((r) => r.containerNumber.toUpperCase() === target);
+  const idx = records.findIndex((r) => r.id === target);
   if (idx === -1) {
-    res.status(404).json({ error: 'Container not found' });
+    res.status(404).json({ error: 'Record not found' });
     return;
   }
   records[idx] = { ...records[idx], completedAt: new Date().toISOString() };
@@ -209,12 +219,12 @@ app.post('/api/tracking/containers/:containerNumber/complete', async (req, res) 
 });
 
 /** 撤销完成——重新纳入 Track All 和 Dashboard 统计。 */
-app.post('/api/tracking/containers/:containerNumber/reopen', async (req, res) => {
-  const target = req.params.containerNumber.toUpperCase();
+app.post('/api/tracking/records/:id/reopen', async (req, res) => {
+  const target = req.params.id;
   const records = await loadRecords();
-  const idx = records.findIndex((r) => r.containerNumber.toUpperCase() === target);
+  const idx = records.findIndex((r) => r.id === target);
   if (idx === -1) {
-    res.status(404).json({ error: 'Container not found' });
+    res.status(404).json({ error: 'Record not found' });
     return;
   }
   records[idx] = { ...records[idx], completedAt: null };
@@ -222,36 +232,36 @@ app.post('/api/tracking/containers/:containerNumber/reopen', async (req, res) =>
   res.json(records[idx]);
 });
 
-function parseContainerNumbers(body: unknown): string[] | null {
-  const { containerNumbers } = (body ?? {}) as { containerNumbers?: unknown };
-  if (!Array.isArray(containerNumbers) || containerNumbers.length === 0) return null;
-  return containerNumbers.map((c) => String(c).toUpperCase());
+function parseIds(body: unknown): string[] | null {
+  const { ids } = (body ?? {}) as { ids?: unknown };
+  if (!Array.isArray(ids) || ids.length === 0) return null;
+  return ids.map((c) => String(c));
 }
 
 /**
- * 批量删除——前端多选打勾之后用这个，而不是对每个箱号分别调单条删除接口。
+ * 批量删除——前端多选打勾之后用这个（按记录 id），而不是对每条分别调单条删除接口。
  * 单条接口是"读全部 -> 改一条 -> 存全部"，如果为了批量操作并发调用 N 次单条接口，
  * 多个请求各自读到同一份旧快照、各自存回去，后写的会把先写的改动覆盖掉——批量操作
  * 必须一次读、一次改完全部、一次存，避免这个竞态。
  */
-app.post('/api/tracking/containers/batch-delete', async (req, res) => {
-  const targets = parseContainerNumbers(req.body);
+app.post('/api/tracking/records/batch-delete', async (req, res) => {
+  const targets = parseIds(req.body);
   if (!targets) {
-    res.status(400).json({ error: 'containerNumbers must be a non-empty array' });
+    res.status(400).json({ error: 'ids must be a non-empty array' });
     return;
   }
   const targetSet = new Set(targets);
   const records = await loadRecords();
-  const next = records.filter((r) => !targetSet.has(r.containerNumber.toUpperCase()));
+  const next = records.filter((r) => !targetSet.has(r.id));
   await saveRecords(next);
   res.json({ deleted: records.length - next.length });
 });
 
 /** 批量标记完成，同样的原因——一次读改存，不并发调单条接口。 */
-app.post('/api/tracking/containers/batch-complete', async (req, res) => {
-  const targets = parseContainerNumbers(req.body);
+app.post('/api/tracking/records/batch-complete', async (req, res) => {
+  const targets = parseIds(req.body);
   if (!targets) {
-    res.status(400).json({ error: 'containerNumbers must be a non-empty array' });
+    res.status(400).json({ error: 'ids must be a non-empty array' });
     return;
   }
   const targetSet = new Set(targets);
@@ -259,7 +269,7 @@ app.post('/api/tracking/containers/batch-complete', async (req, res) => {
   let completed = 0;
   const records = await loadRecords();
   const next = records.map((r) => {
-    if (!targetSet.has(r.containerNumber.toUpperCase()) || r.completedAt) return r;
+    if (!targetSet.has(r.id) || r.completedAt) return r;
     completed += 1;
     return { ...r, completedAt: now };
   });
@@ -283,6 +293,11 @@ app.post('/api/tracking/trigger', async (_req, res) => {
     const byContainer = new Map(results.map((r) => [r.cntr.toUpperCase(), r]));
 
     const updated = records.map((r) => {
+      // 已完成/已归档的记录（completedAt 非空，含人工 dispatch 和 OUTGATED）永远不被抓取结果改动——
+      // 它们是 History 里的存档。这一条也顺带防住"同号双记录"：一个箱号可能同时有一条 OUTGATED
+      // 存档 + 一条重新 add 的新 active，新 active 的抓取结果绝不能回写到 OUTGATED 存档上。
+      if (r.completedAt) return r;
+
       const result = byContainer.get(r.containerNumber.toUpperCase());
       if (!result) return r;
 
@@ -292,6 +307,15 @@ app.post('/api/tracking/trigger', async (_req, res) => {
       // Destination/Billing 全被清成空、状态变 ERROR，而这些数据上一轮明明是好的。
       // lastUpdated 也故意不更新：表格上那一列停在旧时间，本身就是"这条没刷新成功"的诚实信号。
       if (result.error && result.error !== 'Container not found in results') return r;
+
+      const notFound = result.error === 'Container not found in results';
+
+      // 生命周期收尾：上一轮还是 GROUNDED（已落地、有堆位），这一轮突然查不到了 →
+      // 判定为已被提离场站（outgated）。标 OUTGATED、写 completedAt 自动归档进 History，
+      // 不再参与后续抓取。保留上一轮的字段快照（Last Hub/Destination/LFD 等），只改状态和时间。
+      if (notFound && r.status === 'GROUNDED') {
+        return { ...r, status: 'OUTGATED' as const, lastUpdated: now, completedAt: now };
+      }
 
       const extra = (result.extra ?? {}) as Record<string, string | null>;
       // Lot-Row-Spot 有值 = 箱子已经卸到场内具体的堆放位置了，这是"已落地"最直接的信号，
