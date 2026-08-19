@@ -219,6 +219,30 @@ Onboarding 表格（v1/v2，见下面）里 Custom Columns 那个 Step 3，客�
 - [x] **Track All 实时进度条** —— `/trigger?stream=1` 流式返回 NDJSON，每抓完一批推一行累计进度（批次 x/y、n/总数、found/notFound/error）；定时任务仍走原 JSON+状态码路径；核心逻辑抽 `runCrawlAndSave` 两路共用。前端边读流边更新，抓取中表格上方显示进度条。150 个真实箱号验证：2 批跑完、数据刷新、0 误归档、无报错。
 - [x] **已部署** —— revision `draye-mvp-00011-ppr`，生产冒烟测试通过。
 
+## 客户反馈第三批：完成即 OUTGATED + 表格性能 + 锁功能入口 + 账号套餐（2026-08-19，已测已部署 00012）
+
+- [x] **手动完成也标 OUTGATED** —— 人工点完成/批量完成的记录状态也置 OUTGATED，跟自动判定的归档
+  语义统一，History 里统一显示。Reopen 时若原状态是 OUTGATED 则回到 UNKNOWN（等下次抓取重判）。
+- [x] **表格排序/滚动性能** —— 实测 248 行、约 4000 单元格。行抽成 `React.memo`（props 全稳定引用，
+  排序只重排、行跳过重渲染；勾选只重渲染该行）；区间选择锚点改 id（跨排序有效、行不接收会变的 idx）；
+  visibleColumns/filtered/sorted 用 useMemo；行加 `content-visibility:auto`（跳过屏幕外行绘制，滚动更跟手，
+  列宽实测稳定）+ 去掉逐行过渡动画。**注意**：248 行且增长中，排序的重排绘制仍有固有成本，
+  彻底流畅需要**虚拟化（只渲染可见 ~30 行）**——这是下一个专门任务，要兼容 sticky 表头 + 横向滚动 + 滚动容器。
+- [x] **锁住的 Dispatch / Invoices 入口** —— 侧栏加两个锁住的导航，点击弹"coming soon"提示、不跳转。
+- [x] **账号套餐（额度/档位）** —— 见 CLAUDE.md "账号套餐"。每日 Track All 上限 + 解锁的 schedule 档位，
+  存 Account tab（每客户一套），环境变量可覆盖用于测试。手动超限 429、定时不受限。界面显示"N/5 left today"、
+  未解锁档位锁住带升级提示。开账号时 `-MaxTrackAllPerDay 5 -AllowedScheduleHours "8"` 配置。
+  现有客户（Newgen）无这些列 → 无限+全解锁，已线上验证不受影响。
+
+### 待办 / 下一步（来自这批的延伸）
+- [ ] **表格虚拟化** —— 列表在 248 行且增长，排序/滚动的根治办法。memo + content-visibility 已缓解，但没根治。
+- [ ] **OUTGATED 真实验证** —— GROUNDED 箱子彻底查不到 → 自动 OUTGATED 归档，这条只能等生产上真实发生时观察确认
+  （本地无法制造"箱子从 BNSF 消失"）。护栏已验证：整批全查无此箱不会误触发归档。
+- [ ] **业务信息架构（用户问题 5/6，待定方向）** —— ①集装箱运营字段（size/weight/PU-BK 等）显示在哪个页面、
+  用 columns 显示隐藏模型；②公司可复用实体（Freight Forwarder/Consignee/Driver 及其关联）放哪。
+  倾向：①归入 Dispatch 页、沿用 tracking 的列显示/隐藏；②做一个独立的 Resources/设置页（注意这跟之前推翻的
+  "可复用下拉字段"设计相关，见上文那一节）。等用户拍板方向再动手。
+
 ## CI/CD 自动部署（进行中 —— 见下）
 
 - [x] **`gcloud run deploy --source .` 单命令部署已验证可用**（每次改完我直接跑这个，源码上传 → Cloud Build 建镜像 → 部署）。

@@ -41,6 +41,12 @@
   一条全新记录（不 reopen 那条 OUTGATED 存档，那是上一段生命周期的货）；人工 dispatch(非 OUTGATED)
   的历史记录仍走 reopen 老逻辑。由此同号可能同时有 History 存档 + 新 active 两条，所以删除/完成/
   reopen/批量这些行级操作全部按记录 `id`（`/api/tracking/records/:id`），不能按箱号，否则会误伤另一条。
+- **账号套餐（额度/档位限制）**——Account tab 后 4 列：`maxTrackAllPerDay`（每日手动 Track All 上限，空=无限）、
+  `allowedScheduleHours`（解锁的定时档位，逗号分隔，空=全部）、`trackAllUsageDate`/`trackAllUsageCount`
+  （用量，按 UTC 日期跨天归零，运行时写）。老账号没这些列 → 默认无限+全解锁，现有客户不受影响。
+  手动 Track All（`?stream=1`）先 `consumeTrackAll` 消费额度、超限 429；定时任务不受限。环境变量
+  `PLAN_MAX_TRACK_ALL_PER_DAY` / `PLAN_ALLOWED_SCHEDULE_HOURS` 可覆盖套餐用于测试模拟，不动 Sheet 数据。
+  开账号时用 `onboard-customer.ps1 -MaxTrackAllPerDay 5 -AllowedScheduleHours "8"` 配置。见 `auth.ts`。
 - **单账号登录，不是多用户系统**——`src/auth.ts` + `data/account.json`（companyName +
   username + password，明文，`.gitignore` 里排除了）。一个部署只服务一个客户公司，
   所以只有一个共享的管理员账号，没有做用户列表/角色/权限这些多用户才需要的东西。
