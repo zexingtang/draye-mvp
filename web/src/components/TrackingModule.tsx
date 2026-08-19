@@ -125,8 +125,8 @@ export function TrackingModule({
   const [searchTerm, setSearchTerm] = useState('');
   const [addOpen, setAddOpen] = useState(false);
   const [columnSettingsOpen, setColumnSettingsOpen] = useState(false);
-  const [sortBy, setSortBy] = useState<string | null>(null);
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+  const [sortStack, setSortStack] = useState<Array<{ key: string; dir: 'asc' | 'desc' }>>([]);
+  const lastSelectedIndexRef = useRef<number | null>(null);
   const [showScheduleMenu, setShowScheduleMenu] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -144,17 +144,23 @@ export function TrackingModule({
     setConfirmBatchDelete(false);
   }, [viewMode]);
 
-  /** 不用嵌套的 setState 写法（在 setSortBy 的 updater 里调 setSortDir）——React 为了检测
-   * "返回值有没有变"会把 updater 多调一次，副作用里的 setSortDir 也跟着多触发一次，
-   * 一来一回等于没切换，点第二下没反应。改成直接读当前值判断，不用 useCallback 包（这个
-   * handler 只在本文件内联调用，不需要跨渲染保持引用稳定）。 */
-  const handleSort = (key: string) => {
-    if (sortBy === key) {
-      setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
-    } else {
-      setSortBy(key);
-      setSortDir('asc');
-    }
+  /** 单击：替换整个排序栈（同一列则切换方向）。Shift+单击：在排序栈里追加列或切换已有列的方向。 */
+  const handleSort = (key: string, shiftKey: boolean) => {
+    setSortStack((prev) => {
+      if (!shiftKey) {
+        if (prev.length === 1 && prev[0].key === key) {
+          return [{ key, dir: prev[0].dir === 'asc' ? 'desc' : 'asc' }];
+        }
+        return [{ key, dir: 'asc' }];
+      }
+      const existingIdx = prev.findIndex((s) => s.key === key);
+      if (existingIdx !== -1) {
+        const next = [...prev];
+        next[existingIdx] = { key, dir: prev[existingIdx].dir === 'asc' ? 'desc' : 'asc' };
+        return next;
+      }
+      return [...prev, { key, dir: 'asc' }];
+    });
   };
 
   /** 点一下变成"确认删除"态（3 秒内没再点会自动取消），再点一下才真的删——不用原生 confirm()。 */
@@ -204,14 +210,7 @@ export function TrackingModule({
     [onReopenContainer]
   );
 
-  const toggleSelect = useCallback((id: string) => {
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }, []);
+  // handleCheckboxClick 需要读当前 sorted，定义在 sorted 之后
 
   /** Batch complete 跟单条一样不需要确认——容易撤销(History 里逐条 Reopen)。 */
   const handleBatchComplete = useCallback(async () => {
@@ -252,29 +251,63 @@ export function TrackingModule({
 
   const filtered = sourceRecords.filter((r) => r.containerNumber.toLowerCase().includes(searchTerm.toLowerCase()));
 
-  const sorted = sortBy
-    ? [...filtered].sort((a, b) => {
-        // 空值永远排最后，不管升序降序——不然点"按 ETA 排序"结果一堆没有 ETA 的空箱号
-        // 排在最前面，最该关注的"快到期的箱子"反而要往下翻才看得到。
-        if (sortBy === 'lastUpdated') {
-          if (!a.lastUpdated && !b.lastUpdated) return 0;
-          if (!a.lastUpdated) return 1;
-          if (!b.lastUpdated) return -1;
-          const at = new Date(a.lastUpdated).getTime();
-          const bt = new Date(b.lastUpdated).getTime();
-          return sortDir === 'asc' ? at - bt : bt - at;
-        }
-        const av = getFieldValue(a, sortBy);
-        const bv = getFieldValue(b, sortBy);
-        if (!av && !bv) return 0;
-        if (!av) return 1;
-        if (!bv) return -1;
-        const cmp = av.localeCompare(bv);
-        return sortDir === 'asc' ? cmp : -cmp;
-      })
-    : viewMode === 'history'
-      ? [...filtered].sort((a, b) => (b.completedAt ?? '').localeCompare(a.completedAt ?? ''))
-      : filtered;
+  // 空值永远排最后——不管升序降序，没有数据的行沉底，有意义的数据浮顶
+  const compareByEntry = (
+    a: (typeof filtered)[0],
+    b: (typeof filtered)[0],
+    key: string,
+    dir: 'asc' | 'desc'
+  ): number => {
+    if (key === 'lastUpdated') {
+      const at = a.lastUpdated ? new Date(a.lastUpdated).getTime() : null;
+      const bt = b.lastUpdated ? new Date(b.lastUpdated).getTime() : null;
+      if (!at && !bt) return 0;
+      if (!at) return 1;
+      if (!bt) return -1;
+      return dir === 'asc' ? at - bt : bt - at;
+    }
+    const av = getFieldValue(a, key);
+    const bv = getFieldValue(b, key);
+    if (!av && !bv) return 0;
+    if (!av) return 1;
+    if (!bv) return -1;
+    const cmp = av.localeCompare(bv);
+    return dir === 'asc' ? cmp : -cmp;
+  };
+
+  const sorted =
+    sortStack.length > 0
+      ? [...filtered].sort((a, b) => {
+          for (const { key, dir } of sortStack) {
+            const cmp = compareByEntry(a, b, key, dir);
+            if (cmp !== 0) return cmp;
+          }
+          return 0;
+        })
+      : viewMode === 'history'
+        ? [...filtered].sort((a, b) => (b.completedAt ?? '').localeCompare(a.completedAt ?? ''))
+        : filtered;
+
+  /** Shift+单击：选中从上次点击行到当前行的整个区间（按当前排序顺序）。普通点击：切换单行。 */
+  const handleCheckboxClick = (e: React.MouseEvent<HTMLInputElement>, id: string, idx: number) => {
+    if (e.shiftKey && lastSelectedIndexRef.current !== null) {
+      const from = Math.min(lastSelectedIndexRef.current, idx);
+      const to = Math.max(lastSelectedIndexRef.current, idx);
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        sorted.slice(from, to + 1).forEach((r) => next.add(r.id));
+        return next;
+      });
+    } else {
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        return next;
+      });
+      lastSelectedIndexRef.current = idx;
+    }
+  };
 
   // "全选"操作的是当前搜索筛选之后看得见的这些行，不是全部 active 箱号——跟大多数表格的全选习惯一致。
   const allVisibleSelected = sorted.length > 0 && sorted.every((r) => selectedIds.has(r.id));
@@ -499,16 +532,21 @@ export function TrackingModule({
                   </th>
                 )}
                 {visibleColumns.map((col) => {
-                  const active = sortBy === col.key;
+                  const sortIdx = sortStack.findIndex((s) => s.key === col.key);
+                  const active = sortIdx !== -1;
+                  const dir = active ? sortStack[sortIdx].dir : null;
                   return (
                     <th
                       key={col.key}
-                      onClick={() => handleSort(col.key)}
+                      onClick={(e) => handleSort(col.key, e.shiftKey)}
                       className="px-4 py-3 text-left text-xs font-medium text-slate-700 uppercase tracking-wider whitespace-nowrap cursor-pointer select-none hover:bg-slate-100"
                     >
                       <div className="flex items-center gap-1">
                         <span>{col.label}</span>
-                        {active && (sortDir === 'asc' ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />)}
+                        {active && (dir === 'asc' ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />)}
+                        {sortStack.length > 1 && active && (
+                          <span className="text-xs font-normal text-slate-400">{sortIdx + 1}</span>
+                        )}
                       </div>
                     </th>
                   );
@@ -542,14 +580,15 @@ export function TrackingModule({
                   </td>
                 </tr>
               ) : (
-                sorted.map((record) => (
+                sorted.map((record, idx) => (
                   <tr key={record.id} className={`hover:bg-slate-50 transition-colors ${selectedIds.has(record.id) ? 'bg-slate-50' : ''}`}>
                     {viewMode === 'active' && (
                       <td className="px-4 py-3">
                         <input
                           type="checkbox"
                           checked={selectedIds.has(record.id)}
-                          onChange={() => toggleSelect(record.id)}
+                          onChange={() => {}}
+                          onClick={(e) => { e.preventDefault(); handleCheckboxClick(e, record.id, idx); }}
                           className="w-4 h-4 rounded border-slate-300 text-slate-800 focus:ring-slate-500 cursor-pointer"
                         />
                       </td>

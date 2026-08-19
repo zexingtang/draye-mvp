@@ -43,13 +43,19 @@ function batchFailedEntirely(results: ContainerResult[]): boolean {
   return results.length > 0 && results.every((r) => r.error && r.error !== 'Container not found in results');
 }
 
-/** 11 位标准集装箱号（4字母+7数字，含校验位）-> BNSF 查询用的 10 位设备号（去掉最后一位校验位） */
+/**
+ * 11 位标准集装箱号（4字母+7数字，含校验位）-> BNSF 查询用的设备号：
+ * 1. 去掉最后一位校验位
+ * 2. 去掉数字部分的前导零（BNSF 系统按不带前导零的数字匹配）
+ * 例：BEAU0274496 -> BEAU27449，BEAU0000095 -> BEAU9
+ */
 function stripCheckDigit(containerNumber: string): string {
   const clean = containerNumber.trim().toUpperCase().replace(/\s+/g, '');
   if (/^[A-Z]{4}\d{7}$/.test(clean)) {
-    return clean.slice(0, -1);
+    const letters = clean.slice(0, 4);
+    const digits = clean.slice(4, -1); // 去掉最后一位校验位，剩 6 位数字
+    return letters + String(parseInt(digits, 10)); // parseInt 自动去掉前导零
   }
-  // 已经是 10 位设备号，或者格式本来就不标准——原样返回，交给 BNSF 自己判断
   return clean;
 }
 
@@ -150,7 +156,10 @@ export class BNSFCrawler implements CarrierCrawler {
         const unitNumber = (await block.locator('[id="UnitNumber"]').first().textContent().catch(() => ''))?.trim() || '';
         if (!unitInit || !unitNumber) continue;
 
-        const queryKey = `${unitInit}${unitNumber}`.toUpperCase();
+        // BNSF 返回的 unitNumber 可能带前导零（如 "027449"），而我们的 map 存的是去掉前导零
+        // 的版本（"27449"），要对齐。parseInt 自动去掉前导零，非纯数字则原样保留。
+        const normalizedUnit = /^\d+$/.test(unitNumber) ? String(parseInt(unitNumber, 10)) : unitNumber;
+        const queryKey = `${unitInit}${normalizedUnit}`.toUpperCase();
         const originalContainer = queryToOriginal.get(queryKey);
         if (!originalContainer) continue; // 页面返回了我们没查过的箱号，忽略
 
