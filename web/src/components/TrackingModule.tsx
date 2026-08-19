@@ -542,7 +542,9 @@ export function TrackingModule({
                   Columns
                 </button>
 
-                <div className="flex flex-col items-stretch">
+                {/* relative + 下方文字绝对定位：这组高度就等于按钮本身，Track All 跟其他按钮对齐，
+                    "5/5 left today" 挂在按钮正下方、不占布局高度、不把这一行撑高。 */}
+                <div className="relative">
                   <button
                     onClick={onTriggerTrackAll}
                     disabled={tracking || trackAllExhausted}
@@ -554,7 +556,7 @@ export function TrackingModule({
                   </button>
                   {trackAllLimit !== null && (
                     <span
-                      className={`mt-1 text-center text-xs ${trackAllExhausted ? 'text-red-500 font-medium' : 'text-slate-400'}`}
+                      className={`absolute top-full left-0 right-0 mt-1 text-center text-xs whitespace-nowrap ${trackAllExhausted ? 'text-red-500 font-medium' : 'text-slate-400'}`}
                     >
                       {trackAllExhausted
                         ? `Limit reached (${trackAllLimit}/day)`
