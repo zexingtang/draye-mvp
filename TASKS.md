@@ -206,6 +206,24 @@ Onboarding 表格（v1/v2，见下面）里 Custom Columns 那个 Step 3，客�
 - [x] **真的复现着测的，不是改完看类型过了就算**：新开了一张一次性测试表（不碰客户那 211 条真实数据），加两个真实箱号 → 跑一次真抓取拿到真实数据 → 用 `BNSF_NAVIGATION_TIMEOUT=1` 强制复现完全一样的超时失败 → 确认三件事：日志里确实失败了并且重试了、`[ALERT]` 照常打出来、**数据完好无损且 `lastUpdated` 停在旧时间戳**。测完把测试表和它产生的备份快照都清理干净了。
 - [x] **备份系统顺带被验证了** —— 排查时直接用前一天刚做的 Cloud Storage 快照做时间线对比（00:00 / 04:00 / 08:00 / 12:01 四个时间点的状态分布），这是判断"是不是一直坏着"的关键证据。备份第一次派上用场就是在真实排查里。
 
+## 客户反馈第二批：前导零 + shift 多选/多列排序 + OUTGATED 生命周期 + 批量提速进度条（2026-08-19，已测已部署）
+
+来自客户实际使用后的反馈，一批做完：
+
+- [x] **BNSF 前导零** —— 去校验位之后，数字段的前导零也要全去掉（`BEAU0274496`→`BEAU27449`、`BEAU0000095`→`BEAU9`）。`crawler.ts` 的 `stripCheckDigit` 用 `parseInt` 去零；结果解析处对返回的 `unitNumber` 同样归一化，否则对不回原始箱号。
+- [x] **shift 范围多选** —— 像 Windows 资源管理器：点第一个、按住 shift 点第十个，中间全选（按当前排序顺序算区间）。**修了上一版引入的 bug**：之前用 `onClick+preventDefault` 拦原生勾选，破坏了受控 checkbox 的对勾刷新（选中了但不显示勾）；改成 onClick 只把 shiftKey 记进 ref、切换交给原生 onChange。本地 150 行真实数据验证：点第1行→shift点第4行→1-4 全打勾、显示"4 selected"。
+- [x] **多列排序** —— 单击列头替换排序（同列切方向）；**shift+单击**追加次级排序、可无限叠加，已在栈里的列则切方向；列头显示优先级序号。典型用法：先按 Status 把 Grounded 排前，再 shift 按 LFD → grounded 里 LFD 早的浮顶。
+- [x] **OUTGATED 生命周期 + 自动归档** —— `ACTIVE(有ETA)→GROUNDED(有堆位)`，若 GROUNDED 箱子下一轮**彻底查不到**则判定已提离场站，标 `OUTGATED`、自动 `completedAt` 归档进 History、不再抓取。区分好：仍能查到但丢了堆位只是变 `UNKNOWN`，不是 OUTGATED。抓取更新跳过所有已完成记录，历史存档永不被回写。
+- [x] **同号双记录 + 行操作按 id** —— OUTGATED 存档留 History；同号再 add 新建记录不 reopen 存档（人工 dispatch 的仍走 reopen）。由此同号可能两条记录，删除/完成/reopen/批量全部改为按记录 id（`/api/tracking/records/:id`），不再按箱号，避免误伤另一条。
+- [x] **DLL 一次上限实测 = 100** —— 拿真实箱号实测：100 正常，105/110/120/150 页面**静默返回空**（全"查无此箱"不报错）。默认批量 50→**90**（留余量不贴硬边界，200 以内 90/100 分批数一样）。护栏：整批全"查无此箱"重贴成真实错误当查询失败处理，触发重试+保留旧数据+报警，且不会误触发 OUTGATED 归档。
+- [x] **Track All 实时进度条** —— `/trigger?stream=1` 流式返回 NDJSON，每抓完一批推一行累计进度（批次 x/y、n/总数、found/notFound/error）；定时任务仍走原 JSON+状态码路径；核心逻辑抽 `runCrawlAndSave` 两路共用。前端边读流边更新，抓取中表格上方显示进度条。150 个真实箱号验证：2 批跑完、数据刷新、0 误归档、无报错。
+- [x] **已部署** —— revision `draye-mvp-00011-ppr`，生产冒烟测试通过。
+
+## CI/CD 自动部署（进行中 —— 见下）
+
+- [x] **`gcloud run deploy --source .` 单命令部署已验证可用**（每次改完我直接跑这个，源码上传 → Cloud Build 建镜像 → 部署）。
+- [ ] **GitHub push 自动触发（方案 B，用户选的）** —— `cloudbuild.yaml` 已写好（build→push Artifact Registry→deploy）。还差两步需要用户在浏览器操作：① 在 Cloud Build 控制台连接 GitHub 仓库并建"push 到 master 触发"的 trigger；② 给 Cloud Build 服务账号授权（`roles/run.admin` + `roles/iam.serviceAccountUser` + `roles/artifactregistry.writer`，我尝试授权被自动模式拦了，需要用户明确批准）。配好之后 push 即自动上线，不再依赖我手动 deploy。
+
 ## 明确排除在这版之外
 
 Dispatch、Invoice（客户可见）、Driver App、UP/CNHAR carrier、多租户账号系统、计费系统 —— 这些不是"以后要做的下一步"，是这版 MVP 有意不做的范围，不要在做当前任务时顺手把它们加回来。

@@ -1,0 +1,36 @@
+# 每次 push 到 master 时自动触发（需要在 Cloud Build 控制台连接 GitHub 仓库并创建触发器）。
+# 步骤：Build 镜像 -> 推送到 Artifact Registry -> 部署到 Cloud Run。
+# 环境变量（SHEET_ID、SCHEDULER_SECRET 等）已经设置在 Cloud Run 服务上，不在这里管。
+
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - build
+      - --tag
+      - us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/draye-mvp:$COMMIT_SHA
+      - --tag
+      - us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/draye-mvp:latest
+      - .
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - push
+      - --all-tags
+      - us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/draye-mvp
+
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    args:
+      - gcloud
+      - run
+      - deploy
+      - draye-mvp
+      - --image=us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/draye-mvp:$COMMIT_SHA
+      - --region=us-central1
+      - --quiet
+
+images:
+  - us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/draye-mvp:$COMMIT_SHA
+  - us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/draye-mvp:latest
+
+options:
+  logging: CLOUD_LOGGING_ONLY
