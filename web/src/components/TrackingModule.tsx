@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -48,6 +48,25 @@ interface TrackingModuleProps {
 type ViewMode = 'active' | 'history';
 
 const SCHEDULE_OPTIONS = [1, 2, 4, 8];
+
+/** 两条记录按某一列比大小。空值永远排最后——不管升降序，没数据的行沉底、有意义的数据浮顶。 */
+function compareByEntry(a: TrackingRecord, b: TrackingRecord, key: string, dir: 'asc' | 'desc'): number {
+  if (key === 'lastUpdated') {
+    const at = a.lastUpdated ? new Date(a.lastUpdated).getTime() : null;
+    const bt = b.lastUpdated ? new Date(b.lastUpdated).getTime() : null;
+    if (!at && !bt) return 0;
+    if (!at) return 1;
+    if (!bt) return -1;
+    return dir === 'asc' ? at - bt : bt - at;
+  }
+  const av = getFieldValue(a, key);
+  const bv = getFieldValue(b, key);
+  if (!av && !bv) return 0;
+  if (!av) return 1;
+  if (!bv) return -1;
+  const cmp = av.localeCompare(bv);
+  return dir === 'asc' ? cmp : -cmp;
+}
 
 /** "0501" -> "05:01"。只处理刚好 4 位数字的情况，其他格式（已经带冒号、carrier 给的格式不一样）原样返回，不瞎改。 */
 function formatEtaTime(value: string): string {
@@ -102,6 +121,116 @@ export function renderTrackingCell(col: ColumnDef, record: TrackingRecord) {
   return <span className="text-sm text-slate-700">{value || <span className="text-slate-400">-</span>}</span>;
 }
 
+interface TrackingRowProps {
+  record: TrackingRecord;
+  visibleColumns: ColumnDef[];
+  viewMode: ViewMode;
+  isSelected: boolean;
+  completing: boolean;
+  deleting: boolean;
+  confirmingDelete: boolean;
+  reopening: boolean;
+  onSetShiftHeld: (v: boolean) => void;
+  onCheckboxToggle: (id: string) => void;
+  onComplete: (record: TrackingRecord) => void;
+  onDelete: (record: TrackingRecord) => void;
+  onReopen: (record: TrackingRecord) => void;
+}
+
+/**
+ * 单行——用 memo 包起来，props 全是稳定引用/基本类型。点排序时行的数据没变、只是重排，
+ * memo 让这些行直接跳过重渲染（React 靠 key 移动已有 DOM），不再全表重建 2000+ 单元格。
+ * 关键：不接收会随排序变化的行号 idx（区间选择的锚点在父层用 id 算），否则 memo 就失效了。
+ */
+const TrackingRow = memo(function TrackingRow({
+  record,
+  visibleColumns,
+  viewMode,
+  isSelected,
+  completing,
+  deleting,
+  confirmingDelete,
+  reopening,
+  onSetShiftHeld,
+  onCheckboxToggle,
+  onComplete,
+  onDelete,
+  onReopen,
+}: TrackingRowProps) {
+  return (
+    // content-visibility: auto —— 浏览器跳过滚动出视口的行的布局/绘制，几百行的表格滚动明显更跟手；
+    // contain-intrinsic-size 给个行高估值（约 45px）好让滚动条尺寸稳定，实测列宽不会跳。
+    // 去掉了 transition-colors：几百行都挂过渡动画，滚动/重绘时是白白的开销。
+    <tr
+      className={`hover:bg-slate-50 ${isSelected ? 'bg-slate-50' : ''}`}
+      style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 45px' }}
+    >
+      {viewMode === 'active' && (
+        <td className="px-4 py-3">
+          <input
+            type="checkbox"
+            checked={isSelected}
+            onClick={(e) => onSetShiftHeld(e.shiftKey)}
+            onChange={() => onCheckboxToggle(record.id)}
+            className="w-4 h-4 rounded border-slate-300 text-slate-800 focus:ring-slate-500 cursor-pointer"
+          />
+        </td>
+      )}
+      {visibleColumns.map((col) => (
+        <td key={col.key} className="px-4 py-3 whitespace-nowrap">
+          {renderTrackingCell(col, record)}
+        </td>
+      ))}
+      {viewMode === 'history' && (
+        <td className="px-4 py-3 whitespace-nowrap text-sm text-slate-500">
+          {record.completedAt ? new Date(record.completedAt).toLocaleString() : '-'}
+        </td>
+      )}
+      <td className="px-4 py-3 text-right">
+        {viewMode === 'active' ? (
+          <div className="flex items-center justify-end gap-1">
+            <button
+              onClick={() => onComplete(record)}
+              disabled={completing}
+              title={`Mark ${record.containerNumber} complete`}
+              className="p-1.5 rounded hover:bg-emerald-50 text-slate-400 hover:text-emerald-600 transition-colors disabled:opacity-50"
+            >
+              {completing ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
+            </button>
+            {confirmingDelete ? (
+              <button
+                onClick={() => onDelete(record)}
+                disabled={deleting}
+                className="px-2 py-1 rounded bg-red-600 text-white text-xs font-medium hover:bg-red-700 disabled:opacity-50 transition-colors flex items-center gap-1"
+              >
+                {deleting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
+                Confirm?
+              </button>
+            ) : (
+              <button
+                onClick={() => onDelete(record)}
+                title={`Remove ${record.containerNumber}`}
+                className="p-1.5 rounded hover:bg-red-50 text-slate-400 hover:text-red-600 transition-colors"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+        ) : (
+          <button
+            onClick={() => onReopen(record)}
+            disabled={reopening}
+            title={`Reopen ${record.containerNumber}`}
+            className="p-1.5 rounded hover:bg-emerald-50 text-slate-400 hover:text-emerald-600 transition-colors disabled:opacity-50 ml-auto block"
+          >
+            {reopening ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCcw className="w-4 h-4" />}
+          </button>
+        )}
+      </td>
+    </tr>
+  );
+});
+
 export function TrackingModule({
   records,
   historyRecords,
@@ -129,7 +258,6 @@ export function TrackingModule({
   const [addOpen, setAddOpen] = useState(false);
   const [columnSettingsOpen, setColumnSettingsOpen] = useState(false);
   const [sortStack, setSortStack] = useState<Array<{ key: string; dir: 'asc' | 'desc' }>>([]);
-  const lastSelectedIndexRef = useRef<number | null>(null);
   const [showScheduleMenu, setShowScheduleMenu] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -140,6 +268,15 @@ export function TrackingModule({
   const [confirmBatchDelete, setConfirmBatchDelete] = useState(false);
   const confirmResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const batchConfirmResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 下面几个 ref 是为了让传给 memo 化行组件的事件回调保持"引用稳定"——
+  // 回调不直接闭包 sorted/confirmDeleteId（那样每次渲染都变、memo 就失效了），
+  // 而是读这些"永远指向最新值"的 ref。shift 区间选择的锚点也用 id 存（不用行索引），
+  // 这样排序把行重排之后锚点依然有效，也不需要给每行传会随排序变化的 idx。
+  const shiftHeldRef = useRef(false);
+  const lastSelectedIdRef = useRef<string | null>(null);
+  const sortedRef = useRef<TrackingRecord[]>([]);
+  const confirmDeleteIdRef = useRef<string | null>(null);
+  confirmDeleteIdRef.current = confirmDeleteId;
 
   // 切到 History,或者列表刷新之后已选的箱号被删/完成了,已选状态就没意义了,清空。
   useEffect(() => {
@@ -166,10 +303,11 @@ export function TrackingModule({
     });
   };
 
-  /** 点一下变成"确认删除"态（3 秒内没再点会自动取消），再点一下才真的删——不用原生 confirm()。 */
+  /** 点一下变成"确认删除"态（3 秒内没再点会自动取消），再点一下才真的删——不用原生 confirm()。
+   * 读 confirmDeleteIdRef 而不是闭包 confirmDeleteId，回调保持引用稳定，memo 化的行才不会白重渲染。 */
   const handleDeleteClick = useCallback(
     async (record: TrackingRecord) => {
-      if (confirmDeleteId !== record.id) {
+      if (confirmDeleteIdRef.current !== record.id) {
         if (confirmResetRef.current) clearTimeout(confirmResetRef.current);
         setConfirmDeleteId(record.id);
         confirmResetRef.current = setTimeout(() => setConfirmDeleteId(null), 3000);
@@ -184,7 +322,7 @@ export function TrackingModule({
         setDeletingId(null);
       }
     },
-    [confirmDeleteId, onDeleteRecord]
+    [onDeleteRecord]
   );
 
   /** Complete 单击即完成，不需要二次确认——它很容易撤销(History 里 Reopen)，不像 Delete 那样是真的丢数据。 */
@@ -249,64 +387,54 @@ export function TrackingModule({
     }
   }, [confirmBatchDelete, records, selectedIds, onBatchDeleteRecords]);
 
-  const visibleColumns = [...columns].filter((c) => c.visible).sort((a, b) => a.order - b.order);
+  // memo 化：这几个派生值只在真正的依赖变化时重算，避免每次渲染（比如勾选一行）都重新
+  // 过滤/排序一遍 150+ 行——配合下面 memo 化的行组件，点排序时不会再全表重渲染。
+  const visibleColumns = useMemo(
+    () => [...columns].filter((c) => c.visible).sort((a, b) => a.order - b.order),
+    [columns]
+  );
   const sourceRecords = viewMode === 'active' ? records : historyRecords;
+  const filtered = useMemo(
+    () => sourceRecords.filter((r) => r.containerNumber.toLowerCase().includes(searchTerm.toLowerCase())),
+    [sourceRecords, searchTerm]
+  );
 
-  const filtered = sourceRecords.filter((r) => r.containerNumber.toLowerCase().includes(searchTerm.toLowerCase()));
-
-  // 空值永远排最后——不管升序降序，没有数据的行沉底，有意义的数据浮顶
-  const compareByEntry = (
-    a: (typeof filtered)[0],
-    b: (typeof filtered)[0],
-    key: string,
-    dir: 'asc' | 'desc'
-  ): number => {
-    if (key === 'lastUpdated') {
-      const at = a.lastUpdated ? new Date(a.lastUpdated).getTime() : null;
-      const bt = b.lastUpdated ? new Date(b.lastUpdated).getTime() : null;
-      if (!at && !bt) return 0;
-      if (!at) return 1;
-      if (!bt) return -1;
-      return dir === 'asc' ? at - bt : bt - at;
-    }
-    const av = getFieldValue(a, key);
-    const bv = getFieldValue(b, key);
-    if (!av && !bv) return 0;
-    if (!av) return 1;
-    if (!bv) return -1;
-    const cmp = av.localeCompare(bv);
-    return dir === 'asc' ? cmp : -cmp;
-  };
-
-  const sorted =
-    sortStack.length > 0
-      ? [...filtered].sort((a, b) => {
-          for (const { key, dir } of sortStack) {
-            const cmp = compareByEntry(a, b, key, dir);
-            if (cmp !== 0) return cmp;
-          }
-          return 0;
-        })
-      : viewMode === 'history'
-        ? [...filtered].sort((a, b) => (b.completedAt ?? '').localeCompare(a.completedAt ?? ''))
-        : filtered;
+  const sorted = useMemo(
+    () =>
+      sortStack.length > 0
+        ? [...filtered].sort((a, b) => {
+            for (const { key, dir } of sortStack) {
+              const cmp = compareByEntry(a, b, key, dir);
+              if (cmp !== 0) return cmp;
+            }
+            return 0;
+          })
+        : viewMode === 'history'
+          ? [...filtered].sort((a, b) => (b.completedAt ?? '').localeCompare(a.completedAt ?? ''))
+          : filtered,
+    [filtered, sortStack, viewMode]
+  );
+  sortedRef.current = sorted; // 供稳定回调读取最新排序结果
 
   /**
-   * Shift+单击：选中从上次点击行到当前行的整个区间（按当前排序顺序）。普通点击：切换单行。
-   * shift 状态用 onClick 提前记进 ref，真正的切换走 checkbox 原生的 onChange——
-   * 不在 onClick 里 preventDefault（那样会破坏受控 checkbox 的对勾刷新，出现"选中了但没打勾"）。
+   * Shift+单击：选中"上次点击那行"到"当前行"之间的整段（按当前排序顺序）。普通点击：切换单行。
+   * - shift 状态用 onClick 提前记进 shiftHeldRef，真正的切换走 checkbox 原生 onChange
+   *   （不在 onClick 里 preventDefault，那样会破坏受控 checkbox 的对勾刷新）。
+   * - 锚点存 id 不存行号：排序把行重排后依然能正确算区间，也让回调不依赖会变的 idx，保持引用稳定。
    */
-  const shiftHeldRef = useRef(false);
-  const handleCheckboxToggle = (id: string, idx: number) => {
-    if (shiftHeldRef.current && lastSelectedIndexRef.current !== null) {
-      const from = Math.min(lastSelectedIndexRef.current, idx);
-      const to = Math.max(lastSelectedIndexRef.current, idx);
-      setSelectedIds((prev) => {
-        const next = new Set(prev);
-        sorted.slice(from, to + 1).forEach((r) => next.add(r.id));
-        return next;
-      });
-      lastSelectedIndexRef.current = idx;
+  const handleCheckboxToggle = useCallback((id: string) => {
+    const cur = sortedRef.current;
+    if (shiftHeldRef.current && lastSelectedIdRef.current) {
+      const a = cur.findIndex((r) => r.id === lastSelectedIdRef.current);
+      const b = cur.findIndex((r) => r.id === id);
+      if (a !== -1 && b !== -1) {
+        const [from, to] = a < b ? [a, b] : [b, a];
+        setSelectedIds((prev) => {
+          const next = new Set(prev);
+          cur.slice(from, to + 1).forEach((r) => next.add(r.id));
+          return next;
+        });
+      }
     } else {
       setSelectedIds((prev) => {
         const next = new Set(prev);
@@ -314,9 +442,13 @@ export function TrackingModule({
         else next.add(id);
         return next;
       });
-      lastSelectedIndexRef.current = idx;
     }
-  };
+    lastSelectedIdRef.current = id;
+  }, []);
+
+  const setShiftHeld = useCallback((v: boolean) => {
+    shiftHeldRef.current = v;
+  }, []);
 
   // "全选"操作的是当前搜索筛选之后看得见的这些行，不是全部 active 箱号——跟大多数表格的全选习惯一致。
   const allVisibleSelected = sorted.length > 0 && sorted.every((r) => selectedIds.has(r.id));
@@ -623,79 +755,23 @@ export function TrackingModule({
                   </td>
                 </tr>
               ) : (
-                sorted.map((record, idx) => (
-                  <tr key={record.id} className={`hover:bg-slate-50 transition-colors ${selectedIds.has(record.id) ? 'bg-slate-50' : ''}`}>
-                    {viewMode === 'active' && (
-                      <td className="px-4 py-3">
-                        <input
-                          type="checkbox"
-                          checked={selectedIds.has(record.id)}
-                          onClick={(e) => { shiftHeldRef.current = e.shiftKey; }}
-                          onChange={() => handleCheckboxToggle(record.id, idx)}
-                          className="w-4 h-4 rounded border-slate-300 text-slate-800 focus:ring-slate-500 cursor-pointer"
-                        />
-                      </td>
-                    )}
-                    {visibleColumns.map((col) => (
-                      <td key={col.key} className="px-4 py-3 whitespace-nowrap">
-                        {renderTrackingCell(col, record)}
-                      </td>
-                    ))}
-                    {viewMode === 'history' && (
-                      <td className="px-4 py-3 whitespace-nowrap text-sm text-slate-500">
-                        {record.completedAt ? new Date(record.completedAt).toLocaleString() : '-'}
-                      </td>
-                    )}
-                    <td className="px-4 py-3 text-right">
-                      {viewMode === 'active' ? (
-                        <div className="flex items-center justify-end gap-1">
-                          <button
-                            onClick={() => handleCompleteClick(record)}
-                            disabled={completingId === record.id}
-                            title={`Mark ${record.containerNumber} complete`}
-                            className="p-1.5 rounded hover:bg-emerald-50 text-slate-400 hover:text-emerald-600 transition-colors disabled:opacity-50"
-                          >
-                            {completingId === record.id ? (
-                              <Loader2 className="w-4 h-4 animate-spin" />
-                            ) : (
-                              <CheckCircle2 className="w-4 h-4" />
-                            )}
-                          </button>
-                          {confirmDeleteId === record.id ? (
-                            <button
-                              onClick={() => handleDeleteClick(record)}
-                              disabled={deletingId === record.id}
-                              className="px-2 py-1 rounded bg-red-600 text-white text-xs font-medium hover:bg-red-700 disabled:opacity-50 transition-colors flex items-center gap-1"
-                            >
-                              {deletingId === record.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
-                              Confirm?
-                            </button>
-                          ) : (
-                            <button
-                              onClick={() => handleDeleteClick(record)}
-                              title={`Remove ${record.containerNumber}`}
-                              className="p-1.5 rounded hover:bg-red-50 text-slate-400 hover:text-red-600 transition-colors"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          )}
-                        </div>
-                      ) : (
-                        <button
-                          onClick={() => handleReopenClick(record)}
-                          disabled={reopeningId === record.id}
-                          title={`Reopen ${record.containerNumber}`}
-                          className="p-1.5 rounded hover:bg-emerald-50 text-slate-400 hover:text-emerald-600 transition-colors disabled:opacity-50 ml-auto block"
-                        >
-                          {reopeningId === record.id ? (
-                            <Loader2 className="w-4 h-4 animate-spin" />
-                          ) : (
-                            <RotateCcw className="w-4 h-4" />
-                          )}
-                        </button>
-                      )}
-                    </td>
-                  </tr>
+                sorted.map((record) => (
+                  <TrackingRow
+                    key={record.id}
+                    record={record}
+                    visibleColumns={visibleColumns}
+                    viewMode={viewMode}
+                    isSelected={selectedIds.has(record.id)}
+                    completing={completingId === record.id}
+                    deleting={deletingId === record.id}
+                    confirmingDelete={confirmDeleteId === record.id}
+                    reopening={reopeningId === record.id}
+                    onSetShiftHeld={setShiftHeld}
+                    onCheckboxToggle={handleCheckboxToggle}
+                    onComplete={handleCompleteClick}
+                    onDelete={handleDeleteClick}
+                    onReopen={handleReopenClick}
+                  />
                 ))
               )}
             </tbody>

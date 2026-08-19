@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { LayoutDashboard, LogOut, Ship } from 'lucide-react';
+import { LayoutDashboard, LogOut, Ship, Truck, FileText, Lock } from 'lucide-react';
 import { DashboardModule } from './components/DashboardModule';
 import { TrackingModule } from './components/TrackingModule';
 import { LoginPage } from './components/LoginPage';
@@ -12,6 +12,12 @@ type Tab = 'dashboard' | 'tracking';
 
 export default function App() {
   const [tab, setTab] = useState<Tab>('dashboard');
+  const [comingSoon, setComingSoon] = useState<string | null>(null);
+  useEffect(() => {
+    if (!comingSoon) return;
+    const t = setTimeout(() => setComingSoon(null), 2600);
+    return () => clearTimeout(t);
+  }, [comingSoon]);
   const { loading: authLoading, loggedIn, companyName, loginError, loggingIn, login, logout } = useAuth();
   const {
     records,
@@ -64,6 +70,19 @@ export default function App() {
     </button>
   );
 
+  // 锁住的导航项——功能还没做，点一下弹一条"敬请期待"的提示，不切页面。
+  const lockedNavItem = (label: string, Icon: typeof LayoutDashboard) => (
+    <button
+      onClick={() => setComingSoon(label)}
+      title={`${label} — coming soon`}
+      className="group w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium text-slate-400 hover:bg-slate-50 transition-colors"
+    >
+      <Icon className="w-4 h-4" />
+      <span>{label}</span>
+      <Lock className="w-3.5 h-3.5 ml-auto text-slate-300 group-hover:text-slate-400" />
+    </button>
+  );
+
   if (authLoading) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center">
@@ -85,6 +104,8 @@ export default function App() {
         </div>
         {navItem('dashboard', 'Dashboard', LayoutDashboard)}
         {navItem('tracking', 'Tracking', Ship)}
+        {lockedNavItem('Dispatch', Truck)}
+        {lockedNavItem('Invoices', FileText)}
 
         <div className="mt-auto pt-2 border-t border-slate-200">
           <button
@@ -124,6 +145,15 @@ export default function App() {
           />
         )}
       </main>
+
+      {comingSoon && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2.5 px-4 py-3 bg-slate-900 text-white rounded-lg shadow-lg text-sm">
+          <Lock className="w-4 h-4 text-slate-300 flex-shrink-0" />
+          <span>
+            <span className="font-medium">{comingSoon}</span> is coming soon — stay tuned.
+          </span>
+        </div>
+      )}
     </div>
   );
 }

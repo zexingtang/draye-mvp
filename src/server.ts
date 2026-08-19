@@ -204,7 +204,11 @@ app.delete('/api/tracking/records/:id', async (req, res) => {
   res.json({ deleted: records.length !== next.length });
 });
 
-/** 标记完成/dispatch——不删除记录，只是从 Track All 和 Dashboard 统计里排除，挪去 History。可 Reopen 撤销。 */
+/**
+ * 标记完成/dispatch——不删除记录，只是从 Track All 和 Dashboard 统计里排除，挪去 History。可 Reopen 撤销。
+ * 状态同时置为 OUTGATED：不管是自动判定（GROUNDED 后消失）还是人工点完成，进 History 就代表这个箱子
+ * 这一段生命周期结束、已提离场站，History 里统一显示 OUTGATED，语义一致。
+ */
 app.post('/api/tracking/records/:id/complete', async (req, res) => {
   const target = req.params.id;
   const records = await loadRecords();
@@ -213,12 +217,12 @@ app.post('/api/tracking/records/:id/complete', async (req, res) => {
     res.status(404).json({ error: 'Record not found' });
     return;
   }
-  records[idx] = { ...records[idx], completedAt: new Date().toISOString() };
+  records[idx] = { ...records[idx], status: 'OUTGATED', completedAt: new Date().toISOString() };
   await saveRecords(records);
   res.json(records[idx]);
 });
 
-/** 撤销完成——重新纳入 Track All 和 Dashboard 统计。 */
+/** 撤销完成——重新纳入 Track All 和 Dashboard 统计。状态回到 UNKNOWN，等下一次抓取重新判定（OUTGATED 不是抓取能产出的状态，留着会误导）。 */
 app.post('/api/tracking/records/:id/reopen', async (req, res) => {
   const target = req.params.id;
   const records = await loadRecords();
@@ -227,7 +231,8 @@ app.post('/api/tracking/records/:id/reopen', async (req, res) => {
     res.status(404).json({ error: 'Record not found' });
     return;
   }
-  records[idx] = { ...records[idx], completedAt: null };
+  const wasOutgated = records[idx].status === 'OUTGATED';
+  records[idx] = { ...records[idx], completedAt: null, status: wasOutgated ? 'UNKNOWN' : records[idx].status };
   await saveRecords(records);
   res.json(records[idx]);
 });
@@ -271,7 +276,7 @@ app.post('/api/tracking/records/batch-complete', async (req, res) => {
   const next = records.map((r) => {
     if (!targetSet.has(r.id) || r.completedAt) return r;
     completed += 1;
-    return { ...r, completedAt: now };
+    return { ...r, status: 'OUTGATED' as const, completedAt: now };
   });
   await saveRecords(next);
   res.json({ completed });
