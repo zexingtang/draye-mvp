@@ -16,7 +16,8 @@ import {
   type TrackingRecord,
   type ColumnDef,
 } from './store.js';
-import { BNSFCrawler } from './carriers/bnsf/index.js';
+import { getCrawler } from './carriers/index.js';
+import type { ContainerResult, CrawlProgressCallback } from './carriers/base.js';
 import {
   loadAccount,
   createSession,
@@ -324,15 +325,51 @@ interface CrawlSummary {
  * 跑一次爬虫并把结果写回 Sheet。可选 onProgress 回调用于流式进度上报。
  * /trigger 的两条路径（定时任务 JSON 版 + UI 流式版）都调这一个函数，逻辑只有一份。
  */
-async function runCrawlAndSave(onProgress?: import('./carriers/base.js').CrawlProgressCallback): Promise<CrawlSummary> {
+async function runCrawlAndSave(onProgress?: CrawlProgressCallback): Promise<CrawlSummary> {
   const records = await loadRecords();
-  const bnsfRecords = records.filter((r) => r.carrier === 'BNSF' && !r.completedAt);
-  if (bnsfRecords.length === 0) {
+  const active = records.filter((r) => !r.completedAt && isSupportedCarrier(r.carrier));
+  if (active.length === 0) {
     return { queried: 0, found: 0, notFound: 0, errored: 0 };
   }
 
-  const crawler = new BNSFCrawler();
-  const results = await crawler.crawl(bnsfRecords.map((r) => r.containerNumber), onProgress);
+  // 按 carrier 分组，各自用各自的爬虫（BNSF 免登录 / UP 要登录，接口完全不同）。
+  // 进度跨 carrier 累加：每跑完一个 carrier 记下它贡献的箱号数/found 等，作为下一个 carrier 进度的基数。
+  const byCarrier = new Map<string, string[]>();
+  for (const r of active) {
+    const list = byCarrier.get(r.carrier) ?? [];
+    list.push(r.containerNumber);
+    byCarrier.set(r.carrier, list);
+  }
+  const total = active.length;
+  const results: ContainerResult[] = [];
+  let baseProcessed = 0;
+  let baseFound = 0;
+  let baseNotFound = 0;
+  let baseErrored = 0;
+  for (const [carrier, containers] of byCarrier) {
+    const crawler = getCrawler(carrier);
+    const carrierResults = await crawler.crawl(
+      containers,
+      onProgress
+        ? (p) =>
+            onProgress({
+              batchesDone: p.batchesDone,
+              totalBatches: p.totalBatches,
+              processed: baseProcessed + p.processed,
+              total,
+              found: baseFound + p.found,
+              notFound: baseNotFound + p.notFound,
+              errored: baseErrored + p.errored,
+            })
+        : undefined
+    );
+    results.push(...carrierResults);
+    baseProcessed += containers.length;
+    baseFound += carrierResults.filter((r) => !r.error).length;
+    baseNotFound += carrierResults.filter((r) => r.error === 'Container not found in results').length;
+    baseErrored += carrierResults.filter((r) => r.error && r.error !== 'Container not found in results').length;
+  }
+
   const now = new Date().toISOString();
   const byContainer = new Map(results.map((r) => [r.cntr.toUpperCase(), r]));
 

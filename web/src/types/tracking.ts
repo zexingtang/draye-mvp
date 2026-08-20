@@ -31,7 +31,7 @@ export interface ColumnDef {
 }
 
 /** 目前只支持 BNSF；结构上是个列表，方便以后加新 carrier */
-export const SUPPORTED_CARRIERS = ['BNSF'] as const;
+export const SUPPORTED_CARRIERS = ['BNSF', 'UP'] as const;
 
 export function getFieldValue(record: TrackingRecord, columnKey: string): string {
   const v = (record as unknown as Record<string, unknown>)[columnKey];

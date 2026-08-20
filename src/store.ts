@@ -13,8 +13,8 @@ import { backupTab } from './backup.js';
 const TRACKING_TAB = 'Tracking';
 const COLUMNS_TAB = 'Columns';
 
-/** 目前只支持 BNSF，结构上留出扩展空间——加新 carrier 时改这一个数组就够了。 */
-export const SUPPORTED_CARRIERS = ['BNSF'] as const;
+/** 支持的 carrier。加新 carrier：这里加一个 + 在 carriers/index.ts 的 getCrawler 里注册对应爬虫。 */
+export const SUPPORTED_CARRIERS = ['BNSF', 'UP'] as const;
 export type Carrier = (typeof SUPPORTED_CARRIERS)[number];
 
 /**
