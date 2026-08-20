@@ -8,8 +8,9 @@
 
 ## 这一版 MVP 的范围（只做这些）
 
-- 自动 Tracking：定时抓取 BNSF（只做这一个 carrier，其他 carrier 里 UP 的登录流程之前
-  验证过不稳定，CNHAR 未验证，都不在这版范围）
+- 自动 Tracking：定时抓取 **BNSF（免登录）+ UP（登录版，2026-08-19 加上）**。CNHAR 未验证，不在范围。
+  加新 carrier：`carriers/<name>/` 写好 → `carriers/index.ts` 的 `getCrawler` 注册 → `store.ts`
+  的 `SUPPORTED_CARRIERS` 加名字（前端 `web/src/types/tracking.ts` 也有一份要同步）。
 - 查询频率客户自己可设置、支持手动触发查询
 - 一个 Dashboard（只含 Tracking 相关指标，不含依赖 Invoice 数据的财务卡片）
 - 不做：Dispatch、Invoice、Driver App、多租户账号、计费系统
@@ -77,10 +78,19 @@
   兜底——这个问题现在已经不存在了，因为免登录接口根本不需要账号密码。这个教训（不要
   为了"方便测试"加默认凭证兜底）在其他 carrier 需要账号密码时还是要记住。
 - BNSF 免登录页面有个 `ETN` 字段（当前列名"Locked ETN Date Time"），含义没有权威文档确认——查过 UP/BNSF 术语表，`Notify`（铁路通知货代"箱子可以提了"）是个真实存在的行业概念，`ETN` 很可能是它的缩写，但没找到实锤，没有贸然改名，先保持原样。
-- 旧仓库 `server/src/services/up/` 目录下堆了 50+ 个带时间戳的调试截图/日志文件，
-  说明 UP 的登录流程一直不稳定（大概率是反爬/多步验证）。这版没有把 UP 迁移过来，
-  以后真要支持 UP，先诊断清楚它到底是"选择器脆弱"还是"真的被拦截"，也可以先查一下
-  UP 有没有类似 BNSF 这样的免登录查询入口，别急着直接搬登录版代码。
+- **UP（Union Pacific）抓取**（`carriers/up/`，2026-08-19 加）——旧仓库那套 2400 行 DOM 抓取一直不稳，
+  这版彻底换了思路，关键几点别忘：
+  1. **UP 必须登录**（MyUPRR / SiteMinder SSO），两步：填 UserID(`#userId`) → 点 CONTINUE →
+     等密码框出现(SPA，URL 不变) → 填密码 → 点 SIGN IN。**headless 实测能登进去，没被反爬拦**——
+     老仓库的脆弱是选择器写错（"User ID or Email" 是浮动 label 不是 placeholder）+ 只会抓 DOM，不是被封。
+  2. **不抓 DOM，直接拦 JSON 接口**：Track Shipments 页填箱号(textarea，最多 1000 个) → SUBMIT，
+     页面 POST `/services/private-shipment-visibility/build-shipment-view/2.0`，响应是干净 JSON
+     (`shipmentNodes[].data`)。爬虫拦这个响应解析（`page.waitForResponse`），稳得多。
+  3. **一次最多 1000 个箱号**（比 BNSF 的 100 宽松），默认批量 900。
+  4. 箱号匹配去校验位 + 去前导零（查询 11 位，接口返回 10 位 equipmentId）。字段映射对齐 BNSF 的
+     extra key，所以同一套列/状态判定直接复用。
+  5. 凭据 `UP_USERNAME`/`UP_PASSWORD` 从环境变量读（生产在 Cloud Run 环境变量，本地在 .env）。
+     排查用 `npm run verify:up`。
 
 ## 基础设施
 
@@ -93,6 +103,7 @@
 - **监控报警**：Cloud Monitoring，邮箱通知渠道 + 三条规则（服务连不上/5xx/爬虫失败率过高），细节见 TASKS.md 对应章节。
 - **数据备份**：Cloud Storage bucket `draye-mvp-backups`（us-central1，90 天自动过期），每次写入 Sheet 成功后顺带把原始行数据快照过去（`src/backup.ts`，接在 `store.ts` 的 `saveRecords`/`saveColumns`）。一个 bucket 服务所有客户部署，按 SHEET_ID 分区。跟主 Sheet 是完全独立的存储/独立的失败域，Sheet 或者这个 Google 账号出问题不影响备份还在。
 - **给新客户开通**：`scripts/onboard-customer.ps1`——一条命令建 Sheet、部署独立 Cloud Run 服务、建独立 Scheduler 任务。现在是"一个客户一套部署"，不是多租户共用一套服务。套餐参数：`-MaxTrackAllPerDay 5 -AllowedScheduleHours "8"`。**注意**：脚本用 `$ErrorActionPreference=Continue`（不是 Stop）——PS 5.1 下 Stop 会把 node/gcloud 写到 stderr 的正常进度当成终止错误、脚本一开跑就挂；改成靠 `$LASTEXITCODE` 判断成败。
+- **UP 抓取凭据**：`UP_USERNAME`/`UP_PASSWORD` 设在各客户 Cloud Run 服务的环境变量上（跟 SCHEDULER_SECRET 一样，不进 Sheet、不进代码）。Newgen 的 `draye-mvp` 服务已设。没设的话 carrier=UP 的箱号抓取会报"缺凭据"，BNSF 不受影响。以后想更严可以迁到 Secret Manager（现在跟项目其它 secret 一样用普通环境变量）。
 - **受限套餐 demo 部署**：`draye-demo`（`https://draye-demo-373319016662.us-central1.run.app`），账号 user01/hermes01，套餐 5次/天 + 仅解锁 8h 档位，独立 Sheet + `demo-track-all` 每 8h。给"真实体验受限用户界面"用的，跟 Newgen 完全隔离（另一套部署 + 另一张表）。
 - **账号管理现状（重要，跟多租户的边界）**：账号（含套餐）存在**各自部署的 Sheet 的 Account tab**，不是后端写死。现在没有管理后台——改账号/套餐/密码靠直接编辑那张 Sheet 的 Account tab，或重跑 onboard 脚本。这是"单租户多部署"（每客户一套服务+一张表，靠基础设施隔离），**不是多租户**（一套服务靠代码里的 tenant 逻辑隔离多个客户）。以后客户多了想集中管理，正确做法是给运维单独做一个"超级管理员"小工具去列举/编辑各部署的 Sheet，而不是把多租户逻辑塞回客户端 app。
 - **GitHub**：`https://github.com/zexingtang/draye-mvp`，已配置为 `origin` remote，本地已经提交过三次，**推送这个环境的自动模式分类器会拦，用户自己在本地终端跑**（`git push -u origin master`）。

@@ -257,6 +257,23 @@ Onboarding 表格（v1/v2，见下面）里 Custom Columns 那个 Step 3，客�
 - [x] **`gcloud run deploy --source .` 单命令部署已验证可用**（每次改完我直接跑这个，源码上传 → Cloud Build 建镜像 → 部署）。
 - [ ] **GitHub push 自动触发（方案 B，用户选的）** —— `cloudbuild.yaml` 已写好（build→push Artifact Registry→deploy）。还差两步需要用户在浏览器操作：① 在 Cloud Build 控制台连接 GitHub 仓库并建"push 到 master 触发"的 trigger；② 给 Cloud Build 服务账号授权（`roles/run.admin` + `roles/iam.serviceAccountUser` + `roles/artifactregistry.writer`，我尝试授权被自动模式拦了，需要用户明确批准）。配好之后 push 即自动上线，不再依赖我手动 deploy。
 
+## 支持 UP (Union Pacific) 抓取（2026-08-19，已实现已部署，待生产真实数据验证）
+
+客户要求加 UP。之前客户自己试过没成功；旧仓库那套 2400 行 DOM 抓取一直不稳。这次重做，走通了：
+
+- [x] **逆向清楚了** —— UP 必须登录（MyUPRR/SiteMinder SSO，两步 UserID→CONTINUE→密码→SIGN IN）。
+  **headless 实测能登进去，没被反爬拦**（老代码脆弱是选择器错 + 只抓 DOM）。用两个真实箱号
+  (NYKU3685258/SMCU1115772) 端到端验证，结果跟客户手动查的完全一致（截图已发客户）。
+- [x] **不抓 DOM，直接拦 JSON 接口** —— Track Shipments 填箱号(最多 1000)→SUBMIT，页面 POST
+  `build-shipment-view/2.0` 返回干净 JSON。爬虫拦响应解析。一次能查 1000 个（BNSF 只 100）。
+- [x] **多 carrier 路由** —— `carriers/index.ts` getCrawler 注册表；server 按 carrier 分组各用各的爬虫、
+  进度累加；SUPPORTED_CARRIERS 前后端加 'UP'；Add Containers 的 Rail 选择器自动多出 UP。BNSF 不受影响。
+- [x] **凭据走环境变量** —— UP_USERNAME/UP_PASSWORD，生产在 Cloud Run（draye-mvp 已设），本地在 .env。
+  `npm run verify:up` 排查。字段映射对齐 BNSF 的 extra key，状态判定/列直接复用。
+- [ ] **生产真实验证** —— 需要往 Newgen 加 carrier=UP 的箱号跑一次 Track All，确认线上整条链路。
+  爬虫本身已实测通过；这一步是确认多 carrier 在生产环境的集成没问题（等客户确认要不要把那两个
+  UP 箱号正式加进生产追踪）。
+
 ## 明确排除在这版之外
 
 Dispatch、Invoice（客户可见）、Driver App、UP/CNHAR carrier、多租户账号系统、计费系统 —— 这些不是"以后要做的下一步"，是这版 MVP 有意不做的范围，不要在做当前任务时顺手把它们加回来。
